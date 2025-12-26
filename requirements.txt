@@ -1,0 +1,16 @@
+# Database
+duckdb
+pyodbc
+psycopg2
+
+# http
+requests
+
+# Testing framework
+pytest
+pytest-cov
+
+# Data analysis and visualization
+pandas
+jupyter
+nbconvert

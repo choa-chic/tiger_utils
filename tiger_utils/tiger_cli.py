@@ -1,0 +1,182 @@
+
+"""
+tiger_cli.py - Command-line interface for TIGER/Line downloads using tiger_utils.download modules
+"""
+
+import sys
+import argparse
+from pathlib import Path
+import time
+from tiger_utils.download.downloader import download_county_data
+from tiger_utils.download.state import DownloadState, DownloadStateDB
+from tiger_utils.download.discover import discover_state_files
+from tiger_utils.download.url_patterns import (
+    construct_url, get_county_list, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES, FIFTY_STATE_FIPS, TERRITORY_FIPS
+)
+from tiger_utils.utils.logger import get_logger, setup_logger
+
+setup_logger()
+logger = get_logger()
+
+def create_state_tracker(state_file: Path, use_db: bool = None):
+    """
+    Create appropriate state tracker (DuckDB or JSON).
+    """
+    if use_db is False:
+        return DownloadState(state_file.with_suffix('.json'))
+    try:
+        import duckdb
+        return DownloadStateDB(state_file.with_suffix('.duckdb'))
+    except ImportError:
+        logger.warning("DuckDB not available. Falling back to JSON.")
+        return DownloadState(state_file.with_suffix('.json'))
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Download TIGER/Line Shapefiles from US Census Bureau',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('--year', type=int, default=2025, help='Year to download (default: 2025)')
+    parser.add_argument('--output', type=str, default='tiger_data', help='Output directory (default: tiger_data)')
+    parser.add_argument('--states', type=str, help='Comma-separated state FIPS codes (e.g., "01,06,48")')
+    parser.add_argument('--types', type=str, help='Comma-separated dataset types (e.g., "EDGES,ADDR")')
+    parser.add_argument('--list-types', action='store_true', help='List available dataset types and exit')
+    parser.add_argument('--list-states', action='store_true', help='List all state FIPS codes and exit')
+    parser.add_argument('--show-status', action='store_true', help='Show download status for all states/territories and exit')
+    parser.add_argument('--discover', action='store_true', help='Discover available files by scraping Census Bureau directories')
+    parser.add_argument('--discover-only', action='store_true', help='Only discover and populate URLs in state database, do not download files')
+    parser.add_argument('--use-db', action='store_true', default=True, help='Use DuckDB for state tracking (default: enabled)')
+    parser.add_argument('--no-use-db', dest='use_db', action='store_false', help='Use JSON for state tracking instead of DuckDB')
+    parser.add_argument('--parallel', type=int, default=4, help='Number of parallel downloads (default: 4)')
+    parser.add_argument('--timeout', type=int, default=60, help='Download timeout in seconds (default: 60)')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose (DEBUG) logging output')
+    parser.add_argument('--quiet', '-q', action='store_true', help='Enable quiet mode (WARNING and ERROR only)')
+    parser.add_argument('--state-file', type=str, default='.tiger_download_state', help='Path to state file (default: .tiger_download_state, extension added automatically)')
+    parser.add_argument('--include-territories', action='store_true', help='Include US territories (default: only 50 states)')
+
+    args = parser.parse_args()
+
+    # Configure logging level
+    if args.quiet:
+        logger.setLevel(30)
+    elif args.verbose:
+        logger.setLevel(10)
+    else:
+        logger.setLevel(20)
+
+    if args.list_types:
+        print("\nAvailable Dataset Types:")
+        print("=" * 70)
+        for dtype, desc in DATASET_TYPES.items():
+            print(f"  {dtype:15s} - {desc}")
+        return 0
+
+    if args.list_states:
+        print("\nState FIPS Codes:")
+        print("=" * 70)
+        for fips, name in sorted(STATES.items()):
+            print(f"  {fips} - {name}")
+        return 0
+
+    output_dir = Path(args.output)
+    state_file_base = output_dir / args.state_file
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ...existing code...
+
+    if args.states:
+        state_list = [s.strip().zfill(2) for s in args.states.split(',')]
+        invalid = [s for s in state_list if s not in STATES]
+        if invalid:
+            logger.error(f"Invalid state FIPS codes: {invalid}")
+            return 1
+        # If any requested FIPS is a territory, allow it, otherwise filter to 50 states unless --include-territories
+        if not args.include_territories:
+            if not any(s in TERRITORY_FIPS for s in state_list):
+                state_list = [s for s in state_list if s in FIFTY_STATE_FIPS]
+    else:
+        # Default: only 50 states unless --include-territories
+        if args.include_territories:
+            state_list = list(STATES.keys())
+        else:
+            state_list = sorted(FIFTY_STATE_FIPS)
+
+    # Determine which dataset types to download
+    if args.types:
+        type_list = [t.strip().upper() for t in args.types.split(',')]
+        invalid = [t for t in type_list if t not in DATASET_TYPES]
+        if invalid:
+            logger.error(f"Invalid dataset types: {invalid}")
+            return 1
+    else:
+        type_list = ['EDGES', 'ADDR', 'FEATNAMES'] if args.discover_only else COUNTY_LEVEL_TYPES
+
+    # State tracking backend
+    use_db = args.use_db
+    download_state = create_state_tracker(state_file_base, use_db=use_db)
+
+    # Show status
+    if args.show_status:
+        states_list = download_state.list_states_requested()
+        if not states_list:
+            logger.info("No states/territories have been requested for download yet.")
+            return 0
+        for state_fips in sorted(states_list):
+            state_summary = download_state.get_state_summary(state_fips)
+            urls = download_state.get_urls_for_state(state_fips)
+            progress = download_state.get_download_progress(state_fips)
+            state_name = state_summary.get('name', f"State {state_fips}")
+            completed = state_summary.get('completed', 0)
+            failed = state_summary.get('failed', 0)
+            total = completed + failed
+            logger.info(f"State: {state_name} (FIPS: {state_fips})")
+            logger.info(f"  Completed: {completed}")
+            logger.info(f"  Failed:    {failed}")
+            logger.info(f"  Total:     {total}")
+            if urls['completed']:
+                logger.info(f"  Sample Completed URLs: {urls['completed'][:3]}")
+            if urls['failed']:
+                logger.info(f"  Failed URLs: {urls['failed'][:3]}")
+            if progress['pending'] > 0 and progress['pending_urls']:
+                logger.info(f"  Sample Pending URLs: {progress['pending_urls'][:3]}")
+        return 0
+
+    # Discover-only mode
+    if args.discover_only:
+        total_discovered = 0
+        for state_fips in state_list:
+            discovered = discover_state_files(state_fips, args.year, type_list, args.timeout)
+            all_urls = set()
+            for urls in discovered.values():
+                all_urls.update(urls)
+            download_state.set_discovered_urls(state_fips, all_urls)
+            total_discovered += len(all_urls)
+            logger.info(f"Discovered {len(all_urls)} files for {state_fips}")
+        logger.info(f"Total URLs Discovered: {total_discovered}")
+        return 0
+
+    # Download data for each state
+    total_successful = 0
+    total_failed = 0
+    total_not_found = 0
+    for state_fips in state_list:
+        successful, failed, not_found = download_county_data(
+            state_fips, args.year, output_dir, type_list, args.parallel, args.timeout, download_state, discover_files=args.discover
+        )
+        total_successful += successful
+        total_failed += failed
+        total_not_found += not_found
+    logger.info(f"Total Successful: {total_successful}")
+    logger.info(f"Total Not Found:  {total_not_found}")
+    logger.info(f"Total Failed:     {total_failed}")
+    return 0 if total_failed == 0 else 1
+
+if __name__ == '__main__':
+    sys.exit(main())
+from tiger_utils.download.downloader import download_file, download_county_data
+from tiger_utils.download.state import DownloadState, DownloadStateDB
+from tiger_utils.download.discover import discover_state_files
+from tiger_utils.download.url_patterns import (
+    construct_url, get_county_list, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES
+)
+from tiger_utils.utils.logger import get_logger, setup_logger
