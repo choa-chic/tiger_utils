@@ -3,6 +3,10 @@ duckdb
 pyodbc
 psycopg2
 
+# GIS
+fiona
+shapely
+
 # http
 requests
 cloudscraper

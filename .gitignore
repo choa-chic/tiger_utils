@@ -13,10 +13,22 @@ venv/
 *.csv
 *.sqlite
 *.db
+*-journal
 *.zip
 *.tar.gz
+*.xml
+*.shp
+
+**/_tiger_tmp/*
+*.cpg
+*.prj
+*.dbf
+*.shx
 
 # logs
 **/log*
 *.log
 logs/
+
+# other
+s3_sync.md
