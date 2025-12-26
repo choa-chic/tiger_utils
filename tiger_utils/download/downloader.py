@@ -91,10 +91,23 @@ def download_county_data(state_fips: str, year: int, output_dir: Path,
     counties = get_county_list(state_fips, year)
     logger.info(f"Found {len(counties)} counties for state {state_fips}")
     download_tasks = []
+    discovered_urls = None
+    if state is not None:
+        # Try to get discovered URLs for this state
+        if hasattr(state, 'data'):
+            discovered_urls = set(state.data.get('discovered_urls', {}).get(state_fips, []))
+        elif hasattr(state, 'get_pending_urls'):
+            try:
+                discovered_urls = set(state.get_pending_urls(state_fips))
+            except Exception:
+                discovered_urls = None
     for dataset_type in dataset_types:
         logger.info(f"Preparing download tasks for dataset type: {dataset_type}")
         for county_fips in counties:
             url = construct_url(year, state_fips, county_fips, dataset_type)
+            if discovered_urls is not None and url not in discovered_urls:
+                logger.debug(f"Skipping non-discovered URL: {url}")
+                continue
             filename = os.path.basename(url)
             output_path = output_dir / state_fips / filename
             output_path.parent.mkdir(parents=True, exist_ok=True)
