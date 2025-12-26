@@ -36,13 +36,16 @@ def main():
         description='Download TIGER/Line Shapefiles from US Census Bureau',
         epilog="""
 Examples:
+  # Show database state:
+  python -m tiger_utils.tiger_cli --show-status
+
   # Discover and populate URLs for 2025 (no download):
   python -m tiger_utils.tiger_cli --discover-only
 
   # Discover for a specific state (California):
   python -m tiger_utils.tiger_cli --discover-only --states 06
 
-  # Sync state with files on disk:
+  # Sync database state/status with files on disk:
   python -m tiger_utils.tiger_cli --sync-state
 
   # Download all data for 2025 (default 50 states):
@@ -54,14 +57,16 @@ Examples:
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
-    # operations
+    # download operations
+    parser.add_argument('--discover-only', action='store_true', help='Only discover and populate URLs in state database, do not download files')
     parser.add_argument('--sync-state', action='store_true', help='Synchronize state database with files on disk (mark completed if file exists)')
+    parser.add_argument('--show-status', action='store_true', help='Show download status for all states/territories and exit')
+    
+    # info commands
     parser.add_argument('--list-types', action='store_true', help='List available dataset types and exit')
     parser.add_argument('--list-states', action='store_true', help='List all state FIPS codes and exit')
-    parser.add_argument('--show-status', action='store_true', help='Show download status for all states/territories and exit')
-    parser.add_argument('--discover', action='store_true', help='Discover available files by scraping Census Bureau directories')
-    parser.add_argument('--discover-only', action='store_true', help='Only discover and populate URLs in state database, do not download files')
-
+    # parser.add_argument('--discover', action='store_true', help='Discover available files by scraping Census Bureau directories')
+    
     # specify parameters
     parser.add_argument('--year', type=int, default=2025, help='Year to download (default: 2025)')
     parser.add_argument('--output', type=str, default=None, help='Output directory (default: tiger_data/YYYY)')
@@ -192,7 +197,7 @@ Examples:
     total_not_found = 0
     for state_fips in state_list:
         successful, failed, not_found = download_county_data(
-            state_fips, args.year, output_dir, type_list, args.parallel, args.timeout, download_state, discover_files=args.discover
+            state_fips, args.year, output_dir, type_list, args.parallel, args.timeout, download_state, discover_files=False
         )
         total_successful += successful
         total_failed += failed

@@ -67,14 +67,16 @@ def construct_url(year: int, state_fips: str, county_fips: str, dataset_type: st
                  tl_{year}_{statefips}{countyfips}_{type}.zip
     """
     base_url = f"https://www2.census.gov/geo/tiger/TIGER{year}"
+    dir_part = dataset_type.upper()
+    file_part = dataset_type.lower()
     if dataset_type in ['EDGES', 'ADDR', 'FACES', 'FEATNAMES']:
-        url = f"{base_url}/{dataset_type}/tl_{year}_{state_fips}{county_fips}_{dataset_type}.zip"
+        url = f"{base_url}/{dir_part}/tl_{year}_{state_fips}{county_fips}_{file_part}.zip"
     elif dataset_type in ['PLACE', 'COUSUB', 'TRACT', 'BG']:
-        url = f"{base_url}/{dataset_type}/tl_{year}_{state_fips}_{dataset_type}.zip"
+        url = f"{base_url}/{dir_part}/tl_{year}_{state_fips}_{file_part}.zip"
     elif dataset_type == 'COUNTY':
         url = f"{base_url}/COUNTY/tl_{year}_{state_fips}_county.zip"
     elif dataset_type == 'STATE':
         url = f"{base_url}/STATE/tl_{year}_us_state.zip"
     else:
-        url = f"{base_url}/{dataset_type}/tl_{year}_{state_fips}_{dataset_type}.zip"
+        url = f"{base_url}/{dir_part}/tl_{year}_{state_fips}_{file_part}.zip"
     return url

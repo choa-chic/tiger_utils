@@ -36,6 +36,7 @@ def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 
         return (True, url, "Already exists")
     temp_path = output_path.with_suffix('.tmp')
     resume_pos = 0
+    last_exception = None
     if temp_path.exists():
         resume_pos = temp_path.stat().st_size
         logger.info(f"Resuming partial download: {temp_path} at {resume_pos} bytes")
@@ -45,7 +46,7 @@ def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 
         "Accept-Language": "en-US,en;q=0.5",
         "Connection": "keep-alive"
     }
-        for attempt in range(retries):
+    for attempt in range(retries):
         try:
             headers = dict(browser_headers)
             if resume_pos > 0:
@@ -67,10 +68,11 @@ def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 
                 state.mark_completed(url, str(output_path), state_fips, output_path.stat().st_size)
             return (True, url, "Downloaded")
         except Exception as e:
+            last_exception = e
             logger.warning(f"Download failed (attempt {attempt+1}/{retries}) for {url}: {e}")
             time.sleep(min(base_delay * (2 ** attempt), max_delay))
     if state:
-        state.mark_failed(url, str(output_path), str(e), state_fips)
+        state.mark_failed(url, str(output_path), str(last_exception), state_fips)
     return (False, url, f"Failed after {retries} attempts")
 
 def download_county_data(state_fips: str, year: int, output_dir: Path, 
@@ -85,11 +87,13 @@ def download_county_data(state_fips: str, year: int, output_dir: Path,
     for dataset_type in dataset_types:
         for county_fips in counties:
             url = construct_url(year, state_fips, county_fips, dataset_type)
-            output_path = output_dir / dataset_type / f"tl_{year}_{state_fips}{county_fips}_{dataset_type}.zip"
+            filename = os.path.basename(url)
+            output_path = output_dir / state_fips / filename
             output_path.parent.mkdir(parents=True, exist_ok=True)
             download_tasks.append((url, output_path, dataset_type, county_fips))
     successful = 0
     failed = 0
+    not_found = 0
     with ThreadPoolExecutor(max_workers=parallel) as executor:
         future_to_task = {executor.submit(download_file, url, output_path, 8, timeout, state, state_fips): (url, output_path) for url, output_path, _, _ in download_tasks}
         for future in as_completed(future_to_task):
@@ -99,8 +103,13 @@ def download_county_data(state_fips: str, year: int, output_dir: Path,
                 if success:
                     successful += 1
                 else:
-                    failed += 1
+                    # Optionally, check msg for 'not found' or 404
+                    if 'not found' in msg.lower() or '404' in msg:
+                        not_found += 1
+                    else:
+                        failed += 1
             except Exception as e:
                 logger.error(f"Error downloading {url}: {e}")
                 failed += 1
-    logger.info(f"Download summary for {state_fips}: Successful: {successful}, Failed: {failed}")
+    logger.info(f"Download summary for {state_fips}: Successful: {successful}, Failed: {failed}, Not found: {not_found}")
+    return successful, failed, not_found

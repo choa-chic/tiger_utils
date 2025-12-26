@@ -5,7 +5,9 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
 _LOGGER_NAME = "tiger_utils"
-_LOG_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+_LOG_DIR = os.path.join(_PROJECT_ROOT, 'logs')
+os.makedirs(_LOG_DIR, exist_ok=True)
 _LOG_BASENAME = f"tiger_utils_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 _LOG_FILE = os.path.join(_LOG_DIR, _LOG_BASENAME)
 _MAX_LINES = 5000
