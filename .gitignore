@@ -1,0 +1,14 @@
+#
+.env
+
+# python
+__pycache__/
+*.py[cod]
+venv/
+
+# data
+*.duckdb
+*.parquet
+*.csv
+*.sqlite
+*.db
