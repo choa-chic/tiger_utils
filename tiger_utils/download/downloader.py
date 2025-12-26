@@ -40,12 +40,12 @@ def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 
         resume_pos = temp_path.stat().st_size
         logger.info(f"Resuming partial download: {temp_path} at {resume_pos} bytes")
     browser_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "TIGERDownloader/1.0 (Research/Educational Use)",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Connection": "keep-alive"
     }
-    for attempt in range(retries):
+        for attempt in range(retries):
         try:
             headers = dict(browser_headers)
             if resume_pos > 0:

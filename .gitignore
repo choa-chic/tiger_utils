@@ -8,10 +8,13 @@ venv/
 
 # data
 *.duckdb
+*.wal
 *.parquet
 *.csv
 *.sqlite
 *.db
+*.zip
+*.tar.gz
 
 # logs
 **/log*
