@@ -11,7 +11,7 @@ import fiona
 from fiona import BytesCollection
 from shapely.geometry import shape
 import binascii
-from . import unzipper
+from tiger_utils.load_db import unzipper
 
 def shp_to_sqlite(shp_path: str, db_path: str, table_name: str) -> None:
     """

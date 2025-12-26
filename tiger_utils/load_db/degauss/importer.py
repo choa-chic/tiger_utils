@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 import sys
 import glob
-from . import db_setup, unzipper, shp_to_sqlite
+
+from tiger_utils.load_db import unzipper
+from . import db_setup, shp_to_sqlite
 
 
 def run_unzip(zip_dir: str, out_dir: str, recursive: bool = False, state: str = None, shape_type: str = None):

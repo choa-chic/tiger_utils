@@ -1,4 +1,3 @@
-
 """
 degauss: TIGER/Line to SQLite/SpatiaLite loader
 
@@ -15,3 +14,10 @@ Modules:
 For CLI usage, run:
 	python -m tiger_utils.load_db.degauss.importer --help
 """
+
+# Avoid star imports to prevent circular import issues.
+# Only import modules, not symbols, to avoid triggering circular imports.
+from . import importer
+from . import db_setup
+from . import shp_to_sqlite
+# Do NOT import unzipper here to avoid circular import (imported at higher level)
