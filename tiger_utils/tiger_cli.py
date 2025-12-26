@@ -4,12 +4,13 @@ tiger_cli.py - Command-line interface for TIGER/Line downloads using tiger_utils
 """
 
 import sys
+import os
 import argparse
 from pathlib import Path
 import time
 from tiger_utils.download.downloader import download_county_data
 from tiger_utils.download.progress_manager import DownloadState, DownloadStateDB
-from tiger_utils.download.discover import discover_state_files
+from tiger_utils.download.discover import discover_state_files, discover_state_files_multi
 from tiger_utils.download.url_patterns import (
     construct_url, get_county_list, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES, FIFTY_STATE_FIPS, TERRITORY_FIPS
 )
@@ -181,7 +182,11 @@ Examples:
     if args.discover_only:
         total_discovered = 0
         for state_fips in state_list:
-            discovered = discover_state_files(state_fips, args.year, type_list, args.timeout)
+            # If multiple states are provided, use the efficient multi-state function
+            if isinstance(state_fips, list):
+                discovered = discover_state_files_multi(state_fips, args.year, type_list, args.timeout)
+            else:
+                discovered = discover_state_files(state_fips, args.year, type_list, args.timeout)
             all_urls = set()
             for urls in discovered.values():
                 all_urls.update(urls)

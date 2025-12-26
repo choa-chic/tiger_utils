@@ -58,7 +58,8 @@ def get_county_list(state_fips: str, year: int = 2025) -> list:
     Get list of county FIPS codes for a given state.
     For 2025, we'll use a comprehensive list approach.
     """
-    return [f"{i:03d}" for i in range(1, 200)]
+    # County FIPS codes should always be odd (001, 003, ..., 199)
+    return [f"{i:03d}" for i in range(1, 200, 2)]
 
 def construct_url(year: int, state_fips: str, county_fips: str, dataset_type: str) -> str:
     """

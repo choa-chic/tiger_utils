@@ -14,7 +14,7 @@ Synchronize state database with files on disk (mark completed if file exists):
 
 `python -m tiger_utils.tiger_cli --sync-state`
 
-## start downloading files
+## Start downloading files
 Download all data for 2025 (default 50 states):
 
 `python -m tiger_utils.tiger_cli`

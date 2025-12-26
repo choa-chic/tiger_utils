@@ -6,6 +6,7 @@ psycopg2
 # http
 requests
 cloudscraper
+bs4
 
 # Testing framework
 pytest
