@@ -2,6 +2,7 @@
 state.py - Download state tracking for TIGER/Line downloads (JSON and DuckDB)
 """
 
+import os
 import time
 from pathlib import Path
 from typing import Dict, List, Set, Optional
@@ -67,6 +68,59 @@ class DownloadState:
         urls = self.get_urls_for_state(state_fips)
         pending = self.get_pending_urls(state_fips)
         return {'discovered': discovered, 'completed': len(urls['completed']), 'failed': len(urls['failed']), 'pending': len(pending), 'pending_urls': pending[:10]}
+
+def sync_state_with_filesystem(output_dir: Path, download_state, state_list):
+    """
+    Scan the output directory for downloaded files and ensure the state database is consistent.
+    Mark files as completed in the state if they exist and are not already marked.
+    Optionally, warn about files marked as completed in the state but missing on disk.
+    """
+    logger.info("="*70)
+    logger.info("Synchronizing state database with file system...")
+    logger.info(f"Output directory: {output_dir}")
+    updated = 0
+    missing = 0
+    for state_fips in state_list:
+        # Get all discovered URLs for this state
+        discovered_urls = set()
+        if hasattr(download_state, 'data'):
+            # JSON backend
+            discovered_urls = set(download_state.data.get('discovered_urls', {}).get(state_fips, []))
+        elif hasattr(download_state, 'get_pending_urls'):
+            # DuckDB backend
+            try:
+                discovered_urls = set(download_state.get_pending_urls(state_fips))
+            except Exception:
+                discovered_urls = set()
+        for url in discovered_urls:
+            # Guess output filename from URL
+            filename = os.path.basename(url)
+            file_path = output_dir / state_fips / filename
+            if file_path.exists():
+                if not download_state.is_completed(str(file_path)):
+                    download_state.mark_completed(url, str(file_path), state_fips=state_fips, file_size=file_path.stat().st_size)
+                    updated += 1
+        # Check for files marked as completed in state but missing on disk
+        if hasattr(download_state, 'data') and 'files' in download_state.data:
+            for output_path, entry in download_state.data['files'].items():
+                if entry.get('status') == 'completed' and entry.get('state_fips') == state_fips:
+                    if not os.path.exists(output_path):
+                        logger.warning(f"File marked as completed but missing: {output_path}")
+                        missing += 1
+        elif hasattr(download_state, 'conn'):
+            # DuckDB backend
+            try:
+                completed_urls = download_state.get_urls_for_state(state_fips).get('completed', [])
+                for url in completed_urls:
+                    filename = os.path.basename(url)
+                    file_path = output_dir / state_fips / filename
+                    if not file_path.exists():
+                        logger.warning(f"File marked as completed but missing: {file_path}")
+                        missing += 1
+            except Exception:
+                pass
+    logger.info(f"Synchronization complete. {updated} file(s) marked as completed. {missing} missing file(s) found.")
+    logger.info("="*70)
 
 # DuckDB-based state tracking (DownloadStateDB)
 try:

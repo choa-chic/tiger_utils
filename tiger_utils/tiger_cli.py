@@ -8,7 +8,7 @@ import argparse
 from pathlib import Path
 import time
 from tiger_utils.download.downloader import download_county_data
-from tiger_utils.download.state import DownloadState, DownloadStateDB
+from tiger_utils.download.progress_manager import DownloadState, DownloadStateDB
 from tiger_utils.download.discover import discover_state_files
 from tiger_utils.download.url_patterns import (
     construct_url, get_county_list, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES, FIFTY_STATE_FIPS, TERRITORY_FIPS
@@ -34,25 +34,49 @@ def create_state_tracker(state_file: Path, use_db: bool = None):
 def main():
     parser = argparse.ArgumentParser(
         description='Download TIGER/Line Shapefiles from US Census Bureau',
+        epilog="""
+Examples:
+  # Discover and populate URLs for 2025 (no download):
+  python -m tiger_utils.tiger_cli --discover-only
+
+  # Discover for a specific state (California):
+  python -m tiger_utils.tiger_cli --discover-only --states 06
+
+  # Sync state with files on disk:
+  python -m tiger_utils.tiger_cli --sync-state
+
+  # Download all data for 2025 (default 50 states):
+  python -m tiger_utils.tiger_cli
+
+  # Download for a specific year and state:
+  python -m tiger_utils.tiger_cli --year 2023 --states 12
+""",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument('--year', type=int, default=2025, help='Year to download (default: 2025)')
-    parser.add_argument('--output', type=str, default='tiger_data', help='Output directory (default: tiger_data)')
-    parser.add_argument('--states', type=str, help='Comma-separated state FIPS codes (e.g., "01,06,48")')
-    parser.add_argument('--types', type=str, help='Comma-separated dataset types (e.g., "EDGES,ADDR")')
+
+    # operations
+    parser.add_argument('--sync-state', action='store_true', help='Synchronize state database with files on disk (mark completed if file exists)')
     parser.add_argument('--list-types', action='store_true', help='List available dataset types and exit')
     parser.add_argument('--list-states', action='store_true', help='List all state FIPS codes and exit')
     parser.add_argument('--show-status', action='store_true', help='Show download status for all states/territories and exit')
     parser.add_argument('--discover', action='store_true', help='Discover available files by scraping Census Bureau directories')
     parser.add_argument('--discover-only', action='store_true', help='Only discover and populate URLs in state database, do not download files')
-    parser.add_argument('--use-db', action='store_true', default=True, help='Use DuckDB for state tracking (default: enabled)')
-    parser.add_argument('--no-use-db', dest='use_db', action='store_false', help='Use JSON for state tracking instead of DuckDB')
+
+    # specify parameters
+    parser.add_argument('--year', type=int, default=2025, help='Year to download (default: 2025)')
+    parser.add_argument('--output', type=str, default=None, help='Output directory (default: tiger_data/YYYY)')
+    parser.add_argument('--states', type=str, help='Comma-separated state FIPS codes (e.g., "01,06,48")')
+    parser.add_argument('--types', type=str, help='Comma-separated dataset types (e.g., "EDGES,ADDR")')
+    parser.add_argument('--progress-file', type=str, default='.tiger_download_state', help='Path to progress file (default: .tiger_download_state, extension added automatically)')
+    parser.add_argument('--include-territories', action='store_true', help='Include US territories (default: only 50 states)')
+
+    # specify behavior
     parser.add_argument('--parallel', type=int, default=4, help='Number of parallel downloads (default: 4)')
     parser.add_argument('--timeout', type=int, default=60, help='Download timeout in seconds (default: 60)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose (DEBUG) logging output')
     parser.add_argument('--quiet', '-q', action='store_true', help='Enable quiet mode (WARNING and ERROR only)')
-    parser.add_argument('--state-file', type=str, default='.tiger_download_state', help='Path to state file (default: .tiger_download_state, extension added automatically)')
-    parser.add_argument('--include-territories', action='store_true', help='Include US territories (default: only 50 states)')
+    # DuckDB is default; --no-use-db forces JSON
+    parser.add_argument('--no-use-db', dest='use_db', action='store_false', default=True, help='Use JSON for state tracking instead of DuckDB')
 
     args = parser.parse_args()
 
@@ -78,11 +102,12 @@ def main():
             print(f"  {fips} - {name}")
         return 0
 
-    output_dir = Path(args.output)
-    state_file_base = output_dir / args.state_file
+    if args.output is None:
+        output_dir = Path(f'tiger_data/{args.year}')
+    else:
+        output_dir = Path(args.output)
+    state_file_base = output_dir / args.progress_file
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # ...existing code...
 
     if args.states:
         state_list = [s.strip().zfill(2) for s in args.states.split(',')]
@@ -112,8 +137,14 @@ def main():
         type_list = ['EDGES', 'ADDR', 'FEATNAMES'] if args.discover_only else COUNTY_LEVEL_TYPES
 
     # State tracking backend
-    use_db = args.use_db
+    use_db = args.use_db  # True unless --no-use-db is passed
     download_state = create_state_tracker(state_file_base, use_db=use_db)
+
+    # Optionally sync state with file system before any other command
+    if args.sync_state:
+        from tiger_utils.download.progress_manager import sync_state_with_filesystem
+        sync_state_with_filesystem(output_dir, download_state, state_list)
+        return 0
 
     # Show status
     if args.show_status:
@@ -172,11 +203,8 @@ def main():
     return 0 if total_failed == 0 else 1
 
 if __name__ == '__main__':
-    sys.exit(main())
-from tiger_utils.download.downloader import download_file, download_county_data
-from tiger_utils.download.state import DownloadState, DownloadStateDB
-from tiger_utils.download.discover import discover_state_files
-from tiger_utils.download.url_patterns import (
-    construct_url, get_county_list, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES
-)
-from tiger_utils.utils.logger import get_logger, setup_logger
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted by user. Exiting.")
+        sys.exit(130)

@@ -12,3 +12,8 @@ venv/
 *.csv
 *.sqlite
 *.db
+
+# logs
+**/log*
+*.log
+logs/

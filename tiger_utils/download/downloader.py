@@ -6,9 +6,16 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 import time
-import requests
+try:
+    import cloudscraper
+    _scraper = cloudscraper.create_scraper()
+    _use_cloudscraper = True
+except ImportError:
+    import requests
+    _scraper = requests
+    _use_cloudscraper = False
 from tiger_utils.utils.logger import get_logger, setup_logger
-from .state import DownloadState, DownloadStateDB
+from .progress_manager import DownloadState, DownloadStateDB
 from .url_patterns import construct_url, get_county_list, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES
 
 setup_logger()
@@ -32,18 +39,28 @@ def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 
     if temp_path.exists():
         resume_pos = temp_path.stat().st_size
         logger.info(f"Resuming partial download: {temp_path} at {resume_pos} bytes")
+    browser_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive"
+    }
     for attempt in range(retries):
         try:
-            headers = {'User-Agent': 'TIGERLine-Downloader/1.0'}
+            headers = dict(browser_headers)
             if resume_pos > 0:
                 headers['Range'] = f'bytes={resume_pos}-'
-            with requests.get(url, stream=True, timeout=timeout, headers=headers) as r:
-                r.raise_for_status()
-                mode = 'ab' if resume_pos > 0 else 'wb'
-                with open(temp_path, mode) as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+            # Use cloudscraper if available, else requests
+            if _use_cloudscraper:
+                r = _scraper.get(url, stream=True, timeout=timeout, headers=headers)
+            else:
+                r = _scraper.get(url, stream=True, timeout=timeout, headers=headers)
+            r.raise_for_status()
+            mode = 'ab' if resume_pos > 0 else 'wb'
+            with open(temp_path, mode) as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
             temp_path.rename(output_path)
             logger.info(f"Downloaded: {output_path}")
             if state:
