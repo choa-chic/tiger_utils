@@ -42,22 +42,32 @@ def import_census_to_duckdb(
     output_path.mkdir(parents=True, exist_ok=True)
     # Unzip all relevant files
     unzip_all(str(input_path), str(output_path), recursive=recursive, state=state, shape_type=shape_type)
-    # Find all .shp files in output_dir
     import re
+    # Import .shp files (spatial)
     shp_files = list(output_path.rglob("*.shp"))
-    # Filter by state FIPS if specified
     if state:
-        # Accept both 2-digit and 3-digit FIPS (with/without leading zero)
-        # e.g., tl_2025_13_ or tl_2025_013_ or tl_2025_13177_
         state_pattern = re.compile(r"tl_\d{4}_(0?%s)[0-9]{3}_" % re.escape(state))
-        filtered_shp_files = [shp for shp in shp_files if state_pattern.search(shp.name)]
-        logger.info(f"Filtered {len(filtered_shp_files)} SHP files for state FIPS {state} (from {len(shp_files)} total).")
-        shp_files = filtered_shp_files
+        shp_files = [shp for shp in shp_files if state_pattern.search(shp.name)]
+        logger.info(f"Filtered {len(shp_files)} SHP files for state FIPS {state} (from {len(list(output_path.rglob('*.shp')))} total).")
     else:
         logger.info(f"Found {len(shp_files)} SHP files to import.")
     for shp_path in shp_files:
         schema = get_duckdb_schema(str(shp_path))
         load_shp_to_duckdb(str(shp_path), schema, db_path)
+
+    # Import .dbf files (non-spatial, e.g. addr, featnames) that do NOT have a corresponding .shp
+    from .loader import load_dbf_to_duckdb
+    dbf_files = list(output_path.rglob("*.dbf"))
+    # Exclude .dbf files that have a .shp with the same stem
+    shp_stems = {shp_path.stem for shp_path in shp_files}
+    dbf_files_to_import = [dbf for dbf in dbf_files if dbf.stem not in shp_stems]
+    if state:
+        dbf_files_to_import = [dbf for dbf in dbf_files_to_import if state_pattern.search(dbf.name)]
+        logger.info(f"Filtered {len(dbf_files_to_import)} DBF files for state FIPS {state} (from {len(dbf_files)} total).")
+    else:
+        logger.info(f"Found {len(dbf_files_to_import)} DBF files to import (non-spatial tables).")
+    for dbf_path in dbf_files_to_import:
+        load_dbf_to_duckdb(str(dbf_path), db_path)
     logger.info("Census import to DuckDB complete.")
 
 def main():
