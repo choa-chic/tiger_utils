@@ -5,6 +5,7 @@ Referenced from DeGAUSS-org/geocoder implementation.
 """
 
 import sqlite3
+import re
 from pathlib import Path
 import fiona
 from shapely.geometry import shape
@@ -37,8 +38,14 @@ def load_edges_to_temp(shp_path: str, db_path: str, batch_size: int = 1000) -> N
         batch = []
         for feat in src:
             props = feat['properties']
-            geom = shape(feat['geometry'])
-            wkb = geom.wkb if feat['geometry'] else None
+            # Handle geometry safely
+            wkb = None
+            if feat['geometry']:
+                try:
+                    geom = shape(feat['geometry'])
+                    wkb = geom.wkb
+                except Exception:
+                    pass  # Leave wkb as None if geometry processing fails
             
             values = (
                 props.get('STATEFP'), props.get('COUNTYFP'), props.get('TLID'),
@@ -153,9 +160,6 @@ def load_tiger_files_to_temp(shp_dir: str, db_path: str, state: str = None) -> N
     Load all TIGER files from directory into temporary tables.
     Follows DeGAUSS-org/geocoder import_tiger pattern.
     """
-    import re
-    from pathlib import Path
-    
     shp_dir = Path(shp_dir)
     
     # Find and load edges files

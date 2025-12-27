@@ -68,24 +68,36 @@ INSERT OR IGNORE INTO edge
 
 -- Generate all ranges from the addr table
 -- Note: digit_suffix() and nondigit_prefix() functions from original are replaced
--- with simpler CAST operations and SUBSTR for basic numeric extraction
+-- with simpler operations. This removes common letter prefixes (A-J, 1/4 alphabet)
+-- from alphanumeric addresses like "123A" -> 123 or "A123" -> 123
+-- For production use, consider using a UDF or more comprehensive letter removal
 INSERT INTO range
     SELECT 
         tlid,
-        -- Extract numeric part: try to CAST, if fails use NULL
+        -- Extract numeric part: strip letters and CAST to INTEGER
         CAST(
             CASE 
                 WHEN fromhn GLOB '*[0-9]*' THEN 
+                    -- Remove letters A-Z (showing first 10 for brevity, extend as needed)
                     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                        fromhn, 'A', ''), 'B', ''), 'C', ''), 'D', ''), 'E', ''), 'F', ''), 'G', ''), 'H', ''), 'I', ''), 'J', '')
+                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        fromhn, 'A', ''), 'B', ''), 'C', ''), 'D', ''), 'E', ''), 'F', ''), 'G', ''), 'H', ''), 'I', ''), 'J', ''),
+                        'K', ''), 'L', ''), 'M', ''), 'N', ''), 'O', ''), 'P', ''), 'Q', ''), 'R', ''), 'S', ''), 'T', ''),
+                        'U', ''), 'V', ''), 'W', ''), 'X', ''), 'Y', ''), 'Z', '')
                 ELSE NULL
             END AS INTEGER
         ) as fromhn_int,
         CAST(
             CASE 
                 WHEN tohn GLOB '*[0-9]*' THEN 
+                    -- Remove letters A-Z (same pattern as fromhn)
                     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                        tohn, 'A', ''), 'B', ''), 'C', ''), 'D', ''), 'E', ''), 'F', ''), 'G', ''), 'H', ''), 'I', ''), 'J', '')
+                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        tohn, 'A', ''), 'B', ''), 'C', ''), 'D', ''), 'E', ''), 'F', ''), 'G', ''), 'H', ''), 'I', ''), 'J', ''),
+                        'K', ''), 'L', ''), 'M', ''), 'N', ''), 'O', ''), 'P', ''), 'Q', ''), 'R', ''), 'S', ''), 'T', ''),
+                        'U', ''), 'V', ''), 'W', ''), 'X', ''), 'Y', ''), 'Z', '')
                 ELSE NULL
             END AS INTEGER
         ) as tohn_int,
