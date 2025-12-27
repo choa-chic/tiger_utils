@@ -1,96 +1,86 @@
 """
-schema.py
+db_setup.py
 Creates the required SQLite schema (tables, indexes) for TIGER/Line data import.
+Referenced from DeGAUSS-org/geocoder implementation.
 """
 import sqlite3
+from pathlib import Path
+
+# Get the directory where this module is located
+MODULE_DIR = Path(__file__).parent
+SQL_DIR = MODULE_DIR / "sql"
 
 def create_schema(db_path: str = "geocoder.db") -> None:
     """
-    Creates tables for TIGER/Line import. Adjust as needed for your schema.
+    Creates tables for TIGER/Line import using SQL files.
+    Referenced from DeGAUSS-org/geocoder implementation.
     """
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    # Set PRAGMA settings for performance
-    cur.execute('PRAGMA temp_store=MEMORY;')
-    cur.execute('PRAGMA journal_mode=OFF;')
-    cur.execute('PRAGMA synchronous=OFF;')
-    cur.execute('PRAGMA cache_size=500000;')
-    cur.execute('PRAGMA count_changes=0;')
-    # Create 'place' table
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS place(
-        zip CHAR(5),
-        city VARCHAR(100),
-        state CHAR(2),
-        city_phone VARCHAR(5),
-        lat NUMERIC(9,6),
-        lon NUMERIC(9,6),
-        status CHAR(1),
-        fips_class CHAR(2),
-        fips_place CHAR(7),
-        fips_county CHAR(5),
-        priority CHAR(1)
-    );
-    ''')
-    # Create 'edge' table
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS edge (
-        tlid INTEGER PRIMARY KEY,
-        geometry BLOB
-    );
-    ''')
-    # Create 'feature' table
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS feature (
-        fid INTEGER PRIMARY KEY,
-        street VARCHAR(100),
-        street_phone VARCHAR(5),
-        paflag BOOLEAN,
-        zip CHAR(5)
-    );
-    ''')
-    # Create 'feature_edge' table
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS feature_edge (
-        fid INTEGER,
-        tlid INTEGER
-    );
-    ''')
-    # Create 'range' table
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS range (
-        tlid INTEGER,
-        fromhn INTEGER,
-        tohn INTEGER,
-        prenum VARCHAR(12),
-        zip CHAR(5),
-        side CHAR(1)
-    );
-    ''')
+    
+    # Read and execute create.sql
+    create_sql_path = SQL_DIR / "create.sql"
+    with open(create_sql_path, 'r') as f:
+        create_sql = f.read()
+    
+    cur.executescript(create_sql)
     conn.commit()
     conn.close()
     print(f"Created schema in {db_path}")
 
 def create_indexes(db_path: str = "geocoder.db") -> None:
     """
-    Creates indexes for TIGER/Line import tables.
+    Creates indexes for TIGER/Line import tables using SQL files.
+    Referenced from DeGAUSS-org/geocoder implementation.
     """
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    # Set PRAGMA settings for performance
-    cur.execute('PRAGMA temp_store=MEMORY;')
-    cur.execute('PRAGMA journal_mode=OFF;')
-    cur.execute('PRAGMA synchronous=OFF;')
-    cur.execute('PRAGMA cache_size=500000;')
-    cur.execute('PRAGMA count_changes=0;')
-    cur.execute('''CREATE INDEX IF NOT EXISTS place_city_phone_state_idx ON place (city_phone, state);''')
-    cur.execute('''CREATE INDEX IF NOT EXISTS place_zip_priority_idx ON place (zip, priority);''')
-    cur.execute('''CREATE INDEX IF NOT EXISTS feature_street_phone_zip_idx ON feature (street_phone, zip);''')
-    cur.execute('''CREATE INDEX IF NOT EXISTS feature_edge_fid_idx ON feature_edge (fid);''')
-    cur.execute('''CREATE INDEX IF NOT EXISTS range_tlid_idx ON range (tlid);''')
+    
+    # Read and execute index.sql
+    index_sql_path = SQL_DIR / "index.sql"
+    with open(index_sql_path, 'r') as f:
+        index_sql = f.read()
+    
+    cur.executescript(index_sql)
     conn.commit()
     conn.close()
     print(f"Created indexes in {db_path}")
+
+def create_temp_tables(db_path: str = "geocoder.db") -> None:
+    """
+    Creates temporary tables for TIGER/Line data loading.
+    Referenced from DeGAUSS-org/geocoder implementation.
+    """
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    
+    # Read and execute setup.sql
+    setup_sql_path = SQL_DIR / "setup.sql"
+    with open(setup_sql_path, 'r') as f:
+        setup_sql = f.read()
+    
+    cur.executescript(setup_sql)
+    conn.commit()
+    conn.close()
+    print(f"Created temporary tables in {db_path}")
+
+def transform_temp_to_final(db_path: str = "geocoder.db") -> None:
+    """
+    Transforms temporary tables to final tables.
+    Referenced from DeGAUSS-org/geocoder implementation convert.sql.
+    """
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    
+    # Read and execute convert.sql
+    convert_sql_path = SQL_DIR / "convert.sql"
+    with open(convert_sql_path, 'r') as f:
+        convert_sql = f.read()
+    
+    cur.executescript(convert_sql)
+    conn.commit()
+    conn.close()
+    print(f"Transformed temporary tables to final tables in {db_path}")
 
 if __name__ == "__main__":
     import argparse

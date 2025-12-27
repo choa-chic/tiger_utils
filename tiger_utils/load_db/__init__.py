@@ -2,8 +2,9 @@
 # Avoid star imports to prevent circular import issues.
 # Import only top-level modules for explicit access if needed.
 
-from . import duckdb
-from . import sqlite
-from . import postgis
+# Import unzipper which has no external dependencies
 from . import unzipper
-# Do NOT import degauss here to avoid circular import issues
+
+# Do NOT import duckdb, sqlite, postgis, or degauss here to avoid import errors
+# when optional dependencies are not installed.
+# Users should import them directly: from tiger_utils.load_db.degauss import importer
