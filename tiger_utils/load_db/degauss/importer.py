@@ -1,6 +1,7 @@
 """
 importer.py
 Orchestrates the import process: unzip, load shapefiles, create schema, and index.
+Referenced from DeGAUSS-org/geocoder implementation.
 """
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import sys
 import glob
 
 from tiger_utils.load_db import unzipper
-from . import db_setup, shp_to_sqlite
+from . import db_setup, shp_to_sqlite, shp_to_temp_tables
 
 
 def run_unzip(zip_dir: str, out_dir: str, recursive: bool = False, state: str = None, shape_type: str = None):
@@ -38,21 +39,42 @@ def run_shp_import(shp_dir: str, db_path: str):
         shp_to_sqlite.shp_to_sqlite(str(shp_file), db_path, table_name)
 
 def import_tiger(zip_dir: str, db_path: str = "geocoder.db", temp_dir: str = "_tiger_tmp", recursive: bool = False, state: str = None, shape_type: str = None):
+    """
+    Import TIGER/Line data following DeGAUSS-org/geocoder workflow:
+    1. Unzip files
+    2. Create final table schema
+    3. Create temporary tables
+    4. Load shapefiles into temporary tables
+    5. Transform temporary to final tables (convert.sql)
+    6. Create indexes
+    """
     temp_dir = Path(temp_dir)
     temp_dir.mkdir(exist_ok=True)
+    
+    # Step 1: Unzip files
+    print("Step 1: Unzipping files...")
     run_unzip(zip_dir, temp_dir, recursive=recursive, state=state, shape_type=shape_type)
+    
+    # Step 2: Create final table schema
+    print("Step 2: Creating final table schema...")
     run_schema(db_path)
+    
+    # Step 3: Create temporary tables
+    print("Step 3: Creating temporary tables...")
+    db_setup.create_temp_tables(db_path)
+    
+    # Step 4: Load shapefiles into temporary tables
+    print("Step 4: Loading shapefiles into temporary tables...")
+    shp_to_temp_tables.load_tiger_files_to_temp(str(temp_dir), db_path, state=state)
+    
+    # Step 5: Transform temporary to final tables
+    print("Step 5: Transforming temporary to final tables...")
+    db_setup.transform_temp_to_final(db_path)
+    
+    # Step 6: Create indexes
+    print("Step 6: Creating indexes...")
     run_indexes(db_path)
-    # Pass state/shape_type to run_shp_import via sys attributes
-    import sys
-    sys._importer_state = state
-    sys._importer_shape_type = shape_type
-    run_shp_import(temp_dir, db_path)
-    # Clean up
-    if hasattr(sys, '_importer_state'):
-        del sys._importer_state
-    if hasattr(sys, '_importer_shape_type'):
-        del sys._importer_shape_type
+    
     print(f"Import complete. Database at {db_path}")
 
 if __name__ == "__main__":
