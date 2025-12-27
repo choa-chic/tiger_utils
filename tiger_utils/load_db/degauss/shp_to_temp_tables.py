@@ -10,28 +10,37 @@ import fiona
 from shapely.geometry import shape
 
 
-def load_edges_to_temp(shp_path: str, db_path: str) -> None:
+def _batch_insert(conn, insert_sql, values_batch):
+    """Helper function for batch inserts with proper transaction handling."""
+    cur = conn.cursor()
+    cur.executemany(insert_sql, values_batch)
+    conn.commit()
+
+
+def load_edges_to_temp(shp_path: str, db_path: str, batch_size: int = 1000) -> None:
     """
-    Load edges shapefile into tiger_edges temporary table.
+    Load edges shapefile into tiger_edges temporary table with batch processing.
     """
     with fiona.open(shp_path) as src:
         conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
         
+        insert_sql = '''
+            INSERT INTO tiger_edges (
+                statefp, countyfp, tlid, tfidl, tfidr, mtfcc, fullname, smid,
+                lfromadd, ltoadd, rfromadd, rtoadd, zipl, zipr,
+                featcat, hydroflg, railflg, roadflg, olfflg, passflg,
+                divroad, exttyp, ttyp, deckedroad, artpath, persist,
+                gcseflg, offsetl, offsetr, tnidf, tnidt, the_geom
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        
+        batch = []
         for feat in src:
             props = feat['properties']
             geom = shape(feat['geometry'])
             wkb = geom.wkb if feat['geometry'] else None
             
-            cur.execute('''
-                INSERT INTO tiger_edges (
-                    statefp, countyfp, tlid, tfidl, tfidr, mtfcc, fullname, smid,
-                    lfromadd, ltoadd, rfromadd, rtoadd, zipl, zipr,
-                    featcat, hydroflg, railflg, roadflg, olfflg, passflg,
-                    divroad, exttyp, ttyp, deckedroad, artpath, persist,
-                    gcseflg, offsetl, offsetr, tnidf, tnidt, the_geom
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
+            values = (
                 props.get('STATEFP'), props.get('COUNTYFP'), props.get('TLID'),
                 props.get('TFIDL'), props.get('TFIDR'), props.get('MTFCC'),
                 props.get('FULLNAME'), props.get('SMID'),
@@ -44,69 +53,97 @@ def load_edges_to_temp(shp_path: str, db_path: str) -> None:
                 props.get('DECKEDROAD'), props.get('ARTPATH'), props.get('PERSIST'),
                 props.get('GCSEFLG'), props.get('OFFSETL'), props.get('OFFSETR'),
                 props.get('TNIDF'), props.get('TNIDT'), wkb
-            ))
+            )
+            batch.append(values)
+            
+            if len(batch) >= batch_size:
+                _batch_insert(conn, insert_sql, batch)
+                batch = []
         
-        conn.commit()
+        # Insert remaining records
+        if batch:
+            _batch_insert(conn, insert_sql, batch)
+        
         conn.close()
     print(f"Loaded {shp_path} into tiger_edges temporary table")
 
 
-def load_featnames_to_temp(dbf_path: str, db_path: str) -> None:
+def load_featnames_to_temp(dbf_path: str, db_path: str, batch_size: int = 1000) -> None:
     """
-    Load featnames DBF into tiger_featnames temporary table.
+    Load featnames DBF into tiger_featnames temporary table with batch processing.
     """
     with fiona.open(dbf_path) as src:
         conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
         
+        insert_sql = '''
+            INSERT INTO tiger_featnames (
+                tlid, fullname, name, predirabrv, pretypabrv, prequalabr,
+                sufdirabrv, suftypabrv, sufqualabr, predir, pretyp, prequal,
+                sufdir, suftyp, sufqual, linearid, mtfcc, paflag
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        
+        batch = []
         for feat in src:
             props = feat['properties']
             
-            cur.execute('''
-                INSERT INTO tiger_featnames (
-                    tlid, fullname, name, predirabrv, pretypabrv, prequalabr,
-                    sufdirabrv, suftypabrv, sufqualabr, predir, pretyp, prequal,
-                    sufdir, suftyp, sufqual, linearid, mtfcc, paflag
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
+            values = (
                 props.get('TLID'), props.get('FULLNAME'), props.get('NAME'),
                 props.get('PREDIRABRV'), props.get('PRETYPABRV'), props.get('PREQUALABR'),
                 props.get('SUFDIRABRV'), props.get('SUFTYPABRV'), props.get('SUFQUALABR'),
                 props.get('PREDIR'), props.get('PRETYP'), props.get('PREQUAL'),
                 props.get('SUFDIR'), props.get('SUFTYP'), props.get('SUFQUAL'),
                 props.get('LINEARID'), props.get('MTFCC'), props.get('PAFLAG')
-            ))
+            )
+            batch.append(values)
+            
+            if len(batch) >= batch_size:
+                _batch_insert(conn, insert_sql, batch)
+                batch = []
         
-        conn.commit()
+        # Insert remaining records
+        if batch:
+            _batch_insert(conn, insert_sql, batch)
+        
         conn.close()
     print(f"Loaded {dbf_path} into tiger_featnames temporary table")
 
 
-def load_addr_to_temp(dbf_path: str, db_path: str) -> None:
+def load_addr_to_temp(dbf_path: str, db_path: str, batch_size: int = 1000) -> None:
     """
-    Load addr DBF into tiger_addr temporary table.
+    Load addr DBF into tiger_addr temporary table with batch processing.
     """
     with fiona.open(dbf_path) as src:
         conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
         
+        insert_sql = '''
+            INSERT INTO tiger_addr (
+                tlid, fromhn, tohn, side, zip, plus4, fromtyp, totyp,
+                fromarmid, toarmid, arid, mtfcc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        
+        batch = []
         for feat in src:
             props = feat['properties']
             
-            cur.execute('''
-                INSERT INTO tiger_addr (
-                    tlid, fromhn, tohn, side, zip, plus4, fromtyp, totyp,
-                    fromarmid, toarmid, arid, mtfcc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
+            values = (
                 props.get('TLID'), props.get('FROMHN'), props.get('TOHN'),
                 props.get('SIDE'), props.get('ZIP'), props.get('PLUS4'),
                 props.get('FROMTYP'), props.get('TOTYP'),
                 props.get('FROMARMID'), props.get('TOARMID'),
                 props.get('ARID'), props.get('MTFCC')
-            ))
+            )
+            batch.append(values)
+            
+            if len(batch) >= batch_size:
+                _batch_insert(conn, insert_sql, batch)
+                batch = []
         
-        conn.commit()
+        # Insert remaining records
+        if batch:
+            _batch_insert(conn, insert_sql, batch)
+        
         conn.close()
     print(f"Loaded {dbf_path} into tiger_addr temporary table")
 

@@ -68,13 +68,32 @@ INSERT OR IGNORE INTO edge
 
 -- Generate all ranges from the addr table
 -- Note: digit_suffix() and nondigit_prefix() functions from original are replaced
--- with simpler CAST/TRIM operations where possible
+-- with simpler CAST operations and SUBSTR for basic numeric extraction
 INSERT INTO range
     SELECT 
         tlid,
-        CAST(TRIM(fromhn, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ') AS INTEGER) as fromhn_int,
-        CAST(TRIM(tohn, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ') AS INTEGER) as tohn_int,
-        TRIM(fromhn, '0123456789 ') as prenum,
+        -- Extract numeric part: try to CAST, if fails use NULL
+        CAST(
+            CASE 
+                WHEN fromhn GLOB '*[0-9]*' THEN 
+                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        fromhn, 'A', ''), 'B', ''), 'C', ''), 'D', ''), 'E', ''), 'F', ''), 'G', ''), 'H', ''), 'I', ''), 'J', '')
+                ELSE NULL
+            END AS INTEGER
+        ) as fromhn_int,
+        CAST(
+            CASE 
+                WHEN tohn GLOB '*[0-9]*' THEN 
+                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        tohn, 'A', ''), 'B', ''), 'C', ''), 'D', ''), 'E', ''), 'F', ''), 'G', ''), 'H', ''), 'I', ''), 'J', '')
+                ELSE NULL
+            END AS INTEGER
+        ) as tohn_int,
+        -- Extract non-numeric prefix: basic implementation
+        CASE 
+            WHEN fromhn GLOB '[0-9]*' THEN ''
+            ELSE SUBSTR(fromhn, 1, 1)
+        END as prenum,
         zip,
         side
     FROM tiger_addr;
