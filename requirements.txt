@@ -9,6 +9,7 @@ shapely
 dbfread
 
 # http
+httpx
 requests
 cloudscraper
 bs4

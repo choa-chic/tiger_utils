@@ -4,26 +4,20 @@ downloader.py - Download logic and parallelization for TIGER/Line downloads
 
 from pathlib import Path
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 import time
-try:
-    import cloudscraper
-    _scraper = cloudscraper.create_scraper()
-    _use_cloudscraper = True
-except ImportError:
-    import requests
-    _scraper = requests
-    _use_cloudscraper = False
+import httpx
+import asyncio
 from tiger_utils.utils.logger import get_logger, setup_logger
 from .progress_manager import DownloadState, DownloadStateDB
-from .url_patterns import construct_url, get_county_list, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES
+from .url_patterns import construct_url, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES
+from .discover import get_county_list
 
 setup_logger()
 logger = get_logger()
 
-def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 60, 
-                 state=None, state_fips: str = None) -> tuple:
+async def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 60, 
+                        state=None, state_fips: str = None) -> tuple:
     """
     Download a file with enhanced retry logic and partial download resume support.
     Returns (success: bool, url: str, message: str)
@@ -54,19 +48,15 @@ def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 
             headers = dict(browser_headers)
             if resume_pos > 0:
                 headers['Range'] = f'bytes={resume_pos}-'
-            # Use cloudscraper if available, else requests
-            if _use_cloudscraper:
-                logger.info(f"Using cloudscraper for: {url}")
-                r = _scraper.get(url, stream=True, timeout=timeout, headers=headers)
-            else:
-                logger.info(f"Using requests for: {url}")
-                r = _scraper.get(url, stream=True, timeout=timeout, headers=headers)
-            r.raise_for_status()
+            logger.info(f"Using httpx (async) for: {url}")
             mode = 'ab' if resume_pos > 0 else 'wb'
-            with open(temp_path, mode) as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+            async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    with open(temp_path, mode) as f:
+                        async for chunk in response.aiter_bytes(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
             temp_path.rename(output_path)
             logger.info(f"Downloaded: {output_path}")
             if state:
@@ -75,20 +65,21 @@ def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 
         except Exception as e:
             last_exception = e
             logger.warning(f"Download failed (attempt {attempt+1}/{retries}) for {url}: {e}")
-            time.sleep(min(base_delay * (2 ** attempt), max_delay))
+            await asyncio.sleep(min(base_delay * (2 ** attempt), max_delay))
     if state:
         state.mark_failed(url, str(output_path), str(last_exception), state_fips)
     return (False, url, f"Failed after {retries} attempts")
 
-def download_county_data(state_fips: str, year: int, output_dir: Path, 
-                         dataset_types: List[str], parallel: int = 4, 
-                         timeout: int = 60, state=None, 
-                         discover_files: bool = False):
+async def download_county_data(state_fips: str, year: int, output_dir: Path, 
+                               dataset_types: List[str], parallel: int = 8, 
+                               timeout: int = 60, state=None, 
+                               discover_files: bool = False):
     """
     Download county-level data for a state.
     """
     logger.info(f"Starting county data download for state {state_fips}, year {year}, datasets: {dataset_types}")
-    counties = get_county_list(state_fips, year)
+    # Use 'EDGES' as the default dataset_type for county list scraping
+    counties = get_county_list(state_fips, year, dataset_types[0] if dataset_types else 'EDGES')
     logger.info(f"Found {len(counties)} counties for state {state_fips}")
     download_tasks = []
     discovered_urls = None
@@ -116,25 +107,30 @@ def download_county_data(state_fips: str, year: int, output_dir: Path,
     successful = 0
     failed = 0
     not_found = 0
-    logger.info(f"Starting parallel downloads with {parallel} workers")
-    with ThreadPoolExecutor(max_workers=parallel) as executor:
-        future_to_task = {executor.submit(download_file, url, output_path, 8, timeout, state, state_fips): (url, output_path) for url, output_path, _, _ in download_tasks}
-        for future in as_completed(future_to_task):
-            url, output_path = future_to_task[future]
-            try:
-                success, _, msg = future.result()
-                if success:
-                    logger.info(f"Download succeeded: {url}")
-                    successful += 1
+    logger.info(f"Starting parallel downloads with {parallel} workers (asyncio)")
+    sem = asyncio.Semaphore(parallel)
+
+    async def sem_download_file(*args, **kwargs):
+        async with sem:
+            return await download_file(*args, **kwargs)
+
+    tasks = [sem_download_file(url, output_path, 8, timeout, state, state_fips) for url, output_path, _, _ in download_tasks]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for i, result in enumerate(results):
+        url, output_path, _, _ = download_tasks[i]
+        if isinstance(result, Exception):
+            logger.error(f"Error downloading {url}: {result}")
+            failed += 1
+        else:
+            success, _, msg = result
+            if success:
+                logger.info(f"Download succeeded: {url}")
+                successful += 1
+            else:
+                logger.info(f"Download failed: {url} ({msg})")
+                if 'not found' in msg.lower() or '404' in msg:
+                    not_found += 1
                 else:
-                    logger.info(f"Download failed: {url} ({msg})")
-                    # Optionally, check msg for 'not found' or 404
-                    if 'not found' in msg.lower() or '404' in msg:
-                        not_found += 1
-                    else:
-                        failed += 1
-            except Exception as e:
-                logger.error(f"Error downloading {url}: {e}")
-                failed += 1
+                    failed += 1
     logger.info(f"Download summary for {state_fips}: Successful: {successful}, Failed: {failed}, Not found: {not_found}")
     return successful, failed, not_found

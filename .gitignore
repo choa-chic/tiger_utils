@@ -18,7 +18,7 @@ venv/
 *.tar.gz
 *.xml
 *.shp
-
+*.tmp
 **/_tiger_tmp/*
 *.cpg
 *.prj
@@ -32,3 +32,10 @@ logs/
 
 # other
 s3_sync.md
+
+# LLM instructions (will need to force push if we really want them to be there)
+.github/copilot-instructions.md
+*.instructions.md
+**.AGENTS.md
+CLAUDE.md
+GEMINI.md
