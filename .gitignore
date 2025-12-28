@@ -18,7 +18,7 @@ venv/
 *.tar.gz
 *.xml
 *.shp
-
+*.tmp
 **/_tiger_tmp/*
 *.cpg
 *.prj
