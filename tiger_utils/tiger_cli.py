@@ -8,6 +8,7 @@ import os
 import argparse
 from pathlib import Path
 import time
+import asyncio
 from tiger_utils.download.downloader import download_county_data
 from tiger_utils.download.progress_manager import DownloadState, DownloadStateDB
 from tiger_utils.download.discover import discover_state_files, discover_state_files_multi
@@ -77,7 +78,7 @@ Examples:
     parser.add_argument('--include-territories', action='store_true', help='Include US territories (default: only 50 states)')
 
     # specify behavior
-    parser.add_argument('--parallel', type=int, default=4, help='Number of parallel downloads (default: 4)')
+    parser.add_argument('--parallel', type=int, default=8, help='Number of parallel downloads (default: 4)')
     parser.add_argument('--timeout', type=int, default=60, help='Download timeout in seconds (default: 60)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose (DEBUG) logging output')
     parser.add_argument('--quiet', '-q', action='store_true', help='Enable quiet mode (WARNING and ERROR only)')
@@ -197,20 +198,23 @@ Examples:
         return 0
 
     # Download data for each state
-    total_successful = 0
-    total_failed = 0
-    total_not_found = 0
-    for state_fips in state_list:
-        successful, failed, not_found = download_county_data(
-            state_fips, args.year, output_dir, type_list, args.parallel, args.timeout, download_state, discover_files=False
-        )
-        total_successful += successful
-        total_failed += failed
-        total_not_found += not_found
-    logger.info(f"Total Successful: {total_successful}")
-    logger.info(f"Total Not Found:  {total_not_found}")
-    logger.info(f"Total Failed:     {total_failed}")
-    return 0 if total_failed == 0 else 1
+    async def run_all_downloads():
+        total_successful = 0
+        total_failed = 0
+        total_not_found = 0
+        for state_fips in state_list:
+            successful, failed, not_found = await download_county_data(
+                state_fips, args.year, output_dir, type_list, args.parallel, args.timeout, download_state, discover_files=False
+            )
+            total_successful += successful
+            total_failed += failed
+            total_not_found += not_found
+        logger.info(f"Total Successful: {total_successful}")
+        logger.info(f"Total Not Found:  {total_not_found}")
+        logger.info(f"Total Failed:     {total_failed}")
+        return 0 if total_failed == 0 else 1
+
+    return asyncio.run(run_all_downloads())
 
 if __name__ == '__main__':
     try:
