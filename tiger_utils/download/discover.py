@@ -96,3 +96,22 @@ def discover_state_files_multi(states_fips: List[str], year: int, dataset_types:
             discovered[dataset_type][state] = files
     logger.info(f"Multi-state discovery complete for year {year}")
     return discovered
+
+def get_county_list(state_fips: str, year: int = 2025, dataset_type: str = 'EDGES', timeout: int = 30) -> list:
+    """
+    Scrape the Census directory for the given year/state/type and extract county FIPS codes from filenames.
+    Returns a sorted list of unique 3-digit county FIPS codes for the state.
+    """
+    base_url = f"https://www2.census.gov/geo/tiger/TIGER{year}/{dataset_type}/"
+    links = scrape_directory(base_url, timeout=timeout)
+    county_fips_set = set()
+    for l in links:
+        # Example: tl_2025_06001_edges.zip or tl_2025_06001_addr.zip
+        parts = l.split('_')
+        if len(parts) >= 3 and parts[0] == 'tl' and parts[1] == str(year):
+            state_county = parts[2]
+            if state_county.startswith(state_fips) and len(state_county) == 5:
+                county_fips = state_county[2:]
+                if county_fips.isdigit():
+                    county_fips_set.add(county_fips)
+    return sorted(county_fips_set)

@@ -10,7 +10,8 @@ import httpx
 import asyncio
 from tiger_utils.utils.logger import get_logger, setup_logger
 from .progress_manager import DownloadState, DownloadStateDB
-from .url_patterns import construct_url, get_county_list, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES
+from .url_patterns import construct_url, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES
+from .discover import get_county_list
 
 setup_logger()
 logger = get_logger()
@@ -77,7 +78,8 @@ async def download_county_data(state_fips: str, year: int, output_dir: Path,
     Download county-level data for a state.
     """
     logger.info(f"Starting county data download for state {state_fips}, year {year}, datasets: {dataset_types}")
-    counties = get_county_list(state_fips, year)
+    # Use 'EDGES' as the default dataset_type for county list scraping
+    counties = get_county_list(state_fips, year, dataset_types[0] if dataset_types else 'EDGES')
     logger.info(f"Found {len(counties)} counties for state {state_fips}")
     download_tasks = []
     discovered_urls = None
