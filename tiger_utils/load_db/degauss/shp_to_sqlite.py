@@ -61,7 +61,10 @@ def shp_to_sqlite(shp_path: str, db_path: str, table_name: str) -> None:
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
         
-        create_sql = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({col_defs});'
+        # Drop table if it exists to ensure clean load (staging tables are recreated each run)
+        cur.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        
+        create_sql = f'CREATE TABLE "{table_name}" ({col_defs});'
         cur.execute(create_sql)
         
         # Build and execute INSERT statements for all features
