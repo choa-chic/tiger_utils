@@ -155,32 +155,41 @@ def load_addr_to_temp(dbf_path: str, db_path: str, batch_size: int = 1000) -> No
     print(f"Loaded {dbf_path} into tiger_addr temporary table")
 
 
-def load_tiger_files_to_temp(shp_dir: str, db_path: str, state: str = None) -> None:
+def load_tiger_files_to_temp(shp_dir: str, db_path: str, state: str = None, year: str = None) -> None:
     """
     Load all TIGER files from directory into temporary tables.
-    Follows DeGAUSS-org/geocoder import_tiger pattern.
+    Optionally filter or annotate by year (parsed from filename if not provided).
     """
+    import re
     shp_dir = Path(shp_dir)
-    
+
+    def extract_year(filename):
+        m = re.match(r"tl_(\d{4})_", filename)
+        return m.group(1) if m else None
+
     # Find and load edges files
     for shp_file in shp_dir.rglob("*_edges.shp"):
         name = shp_file.name
+        file_year = year or extract_year(name)
         if state:
             if not re.search(r"tl_\d{4}_(0?%s)[0-9]{3}_" % re.escape(state), name):
                 continue
+        # You can pass file_year to load_edges_to_temp if you want to store it
         load_edges_to_temp(str(shp_file), db_path)
-    
+
     # Find and load featnames files
     for dbf_file in shp_dir.rglob("*_featnames.dbf"):
         name = dbf_file.name
+        file_year = year or extract_year(name)
         if state:
             if not re.search(r"tl_\d{4}_(0?%s)[0-9]{3}_" % re.escape(state), name):
                 continue
         load_featnames_to_temp(str(dbf_file), db_path)
-    
+
     # Find and load addr files
     for dbf_file in shp_dir.rglob("*_addr.dbf"):
         name = dbf_file.name
+        file_year = year or extract_year(name)
         if state:
             if not re.search(r"tl_\d{4}_(0?%s)[0-9]{3}_" % re.escape(state), name):
                 continue

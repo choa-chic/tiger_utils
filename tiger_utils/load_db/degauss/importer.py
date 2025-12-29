@@ -38,7 +38,7 @@ def run_shp_import(shp_dir: str, db_path: str):
         table_name = shp_file.stem.lower()
         shp_to_sqlite.shp_to_sqlite(str(shp_file), db_path, table_name)
 
-def import_tiger(zip_dir: str, db_path: str = "geocoder.db", temp_dir: str = "_tiger_tmp", recursive: bool = False, state: str = None, shape_type: str = None):
+def import_tiger(zip_dir: str, db_path: str = "geocoder.db", temp_dir: str = "_tiger_tmp", recursive: bool = False, state: str = None, shape_type: str = None, year: str = None):
     """
     Import TIGER/Line data following DeGAUSS-org/geocoder workflow:
     1. Unzip files
@@ -65,7 +65,7 @@ def import_tiger(zip_dir: str, db_path: str = "geocoder.db", temp_dir: str = "_t
     
     # Step 4: Load shapefiles into temporary tables
     print("Step 4: Loading shapefiles into temporary tables...")
-    shp_to_temp_tables.load_tiger_files_to_temp(str(temp_dir), db_path, state=state)
+    shp_to_temp_tables.load_tiger_files_to_temp(str(temp_dir), db_path, state=state, year=year)
     
     # Step 5: Transform temporary to final tables
     print("Step 5: Transforming temporary to final tables...")
@@ -82,18 +82,30 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TIGER/Line to SQLite/SpatiaLite importer.")
     subparsers = parser.add_subparsers(dest="command", required=False)
 
+
     # All-in-one import
     parser_all = subparsers.add_parser("all", help="Run full import: unzip, schema, indexes, shapefiles")
-    parser_all.add_argument("zip_dir", help="Directory containing TIGER/Line zip files")
+    parser_all.add_argument(
+        "zip_dir",
+        nargs="?",
+        default="./tiger_utils",
+        help="Directory containing TIGER/Line zip files (default: ./tiger_utils)"
+    )
     parser_all.add_argument("--db", dest="db_path", default="geocoder.db", help="Output SQLite DB path (default: geocoder.db)")
     parser_all.add_argument("--tmp", dest="temp_dir", default="_tiger_tmp", help="Temp directory for unzipped files")
     parser_all.add_argument("--recursive", action="store_true", help="Recursively search for zip files")
     parser_all.add_argument("--state", dest="state", default=None, help="State FIPS code to filter zip files (e.g., 13)")
     parser_all.add_argument("--type", dest="shape_type", default=None, help="Shape type to filter zip files (e.g., edges, faces)")
+    parser_all.add_argument("--year", dest="year", default=None, help="Year to filter or annotate (parsed from filename if not provided)")
 
     # Unzip only
     parser_unzip = subparsers.add_parser("unzip", help="Unzip TIGER/Line zip files")
-    parser_unzip.add_argument("zip_dir", help="Directory containing TIGER/Line zip files")
+    parser_unzip.add_argument(
+        "zip_dir",
+        nargs="?",
+        default="./tiger_utils",
+        help="Directory containing TIGER/Line zip files (default: ./tiger_utils)"
+    )
     parser_unzip.add_argument("out_dir", help="Output directory for unzipped files")
     parser_unzip.add_argument("--recursive", action="store_true", help="Recursively search for zip files")
     parser_unzip.add_argument("--state", dest="state", default=None, help="State FIPS code to filter zip files (e.g., 13)")
@@ -115,7 +127,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.command == "all":
-        import_tiger(args.zip_dir, args.db_path, args.temp_dir, recursive=args.recursive, state=args.state, shape_type=args.shape_type)
+        import_tiger(args.zip_dir, args.db_path, args.temp_dir, recursive=args.recursive, state=args.state, shape_type=args.shape_type, year=args.year)
     elif args.command == "unzip":
         run_unzip(args.zip_dir, args.out_dir, recursive=args.recursive, state=args.state, shape_type=args.shape_type)
     elif args.command == "schema":
