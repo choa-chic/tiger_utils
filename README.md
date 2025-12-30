@@ -21,6 +21,14 @@ Download all data for 2025 (default 50 states):
 
 `python -m tiger_utils.tiger_cli`
 
+For more parallelization (if it gets too high, server will start rejecting requests)
+
+`python -m tiger_utils.tiger_cli --parallel 16`
+
+If `--year` was set in discovery above, you must also provide that here:
+
+`python -m tiger_utils.tiger_cli --year 2021`
+
 Download data for specific states (e.g., California and Texas):
 
 `python -m tiger_utils.tiger_cli --year 2025 --states 06 48`
