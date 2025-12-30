@@ -1,7 +1,8 @@
 # Database
 duckdb
 pyodbc
-psycopg2
+psycopg; platform_system != "Linux"
+psycopg[binary]; platform_system == "Linux"
 
 # GIS
 fiona
