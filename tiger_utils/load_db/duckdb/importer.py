@@ -100,9 +100,11 @@ def main():
         help="State FIPS code to filter (optional)",
     )
     parser.add_argument(
-        "--recursive",
-        action="store_true",
-        help="Recursively search for ZIP files",
+        "--no-recursive",
+        action="store_false",
+        dest="recursive",
+        default=True,
+        help="Disable recursive search for ZIP files (default: recursive search enabled)",
     )
     parser.add_argument(
         "--shape-type",
@@ -119,17 +121,65 @@ def main():
     # Ensure database directory exists
     db_dir = Path(db_path).parent
     db_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check if database already exists
+    db_exists = Path(db_path).exists()
+    if db_exists:
+        print("\n" + "="*70)
+        print("⚠️  DATABASE ALREADY EXISTS")
+        print("="*70)
+        print(f"Database file: {db_path}")
+        print(f"File size:     {Path(db_path).stat().st_size / (1024*1024):.2f} MB")
+        print("\nWhat would you like to do?")
+        print("  [A] Append to existing database (add new data)")
+        print("  [R] Remove and start over (delete existing data)")
+        print("  [C] Cancel import")
+        print("="*70)
+        
+        choice = input("\nEnter choice (A/R/C): ").strip().upper()
+        
+        if choice == "R":
+            confirm = input(f"\n⚠️  Are you sure you want to DELETE {db_path}? (yes/no): ").strip().lower()
+            if confirm == "yes":
+                Path(db_path).unlink()
+                print(f"✓ Deleted {db_path}")
+            else:
+                print("Delete cancelled. Exiting.")
+                return
+        elif choice == "C":
+            print("Import cancelled.")
+            return
+        elif choice != "A":
+            print(f"Invalid choice '{choice}'. Exiting.")
+            return
+        # If choice == "A", continue with append mode
+    
     year = args.year
     state = args.state
     recursive = args.recursive
     shape_type = args.shape_type
 
-    print(f"Importing Census data for year {year} into {db_path}")
-    print(f"Input dir: {input_dir}\nOutput dir: {output_dir}")
+    print("\n" + "="*70)
+    print("IMPORT CONFIGURATION")
+    print("="*70)
+    print(f"Year:              {year}")
+    print(f"Database:          {db_path}")
+    print(f"Mode:              {'Append' if db_exists else 'Create new'}")
+    print(f"Tiger data source: {input_dir}")
+    print(f"Extract to:        {output_dir}")
     if state:
-        print(f"Filtering for state FIPS: {state}")
+        print(f"State FIPS filter: {state}")
     if shape_type:
-        print(f"Filtering for shape type: {shape_type}")
+        print(f"Shape type filter: {shape_type}")
+    print(f"Recursive search:  {recursive}")
+    print("="*70)
+    
+    # Ask for confirmation
+    response = input("\nProceed with import? (Y/n): ").strip().lower()
+    if response in ("n", "no"):
+        print("Import cancelled.")
+        return
+    
     import_census_to_duckdb(
         input_dir=input_dir,
         output_dir=output_dir,

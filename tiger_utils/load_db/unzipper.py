@@ -6,6 +6,7 @@ import os
 import zipfile
 from pathlib import Path
 from typing import Optional
+from tiger_utils.utils.logger import get_logger
 
 
 def unzip_all(
@@ -22,6 +23,7 @@ def unzip_all(
     Supports recursive search and filtering by state FIPS and shape type.
     When county is provided, restricts to 5-digit county FIPS in the filename.
     """
+    logger = get_logger()
     input_path = Path(input_dir)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -54,11 +56,11 @@ def unzip_all(
         try:
             with zipfile.ZipFile(zip_file, 'r') as zf:
                 zf.extractall(output_path / zip_file.stem)
-                print(f"Unzipped {zip_file} to {output_path / zip_file.stem}")
+                logger.debug(f"Unzipped {zip_file} to {output_path / zip_file.stem}")
         except zipfile.BadZipFile:
-            print(f"Warning: {zip_file} is not a valid zip file. Skipping.")
+            logger.warning(f"{zip_file} is not a valid zip file. Skipping.")
         except Exception as e:
-            print(f"Warning: Could not unzip {zip_file}: {e}")
+            logger.warning(f"Could not unzip {zip_file}: {e}")
 
 if __name__ == "__main__":
     import argparse

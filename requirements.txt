@@ -3,6 +3,7 @@ duckdb
 pyodbc
 psycopg; platform_system != "Linux"
 psycopg[binary]; platform_system == "Linux"
+pyarrow
 
 # GIS
 fiona
