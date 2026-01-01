@@ -123,6 +123,19 @@ def convert_to_degauss(
         state_fips: Optional state FIPS code to filter (e.g., "13" for Georgia)
         batch_size: Number of records to process at once
     """
+    import os
+    
+    # Check if target database already exists
+    target_path = Path(target_db)
+    if target_path.exists():
+        logger.warning(f"Target database already exists: {target_db}")
+        response = input("Delete existing database and proceed? (y/n): ").strip().lower()
+        if response != 'y':
+            logger.info("Conversion cancelled by user")
+            return
+        target_path.unlink()
+        logger.info("Deleted existing database")
+    
     logger.info(f"Converting {source_db} to {target_db}")
     
     # Connect to target database only
@@ -179,14 +192,15 @@ def convert_to_degauss(
                 ST_Y(ST_Centroid(geom)) as lat,
                 ST_X(ST_Centroid(geom)) as lon
             FROM (
-                SELECT DISTINCT ON (tlid)
+                SELECT 
                     tlid, statefp, countyfp, fullname, 
                     lfromadd, ltoadd, rfromadd, rtoadd,
-                    zipl, zipr, geom
+                    zipl, zipr, geom,
+                    ROW_NUMBER() OVER (PARTITION BY tlid ORDER BY tlid) as rn
                 FROM source_db.main.edges
                 {where_clause}
-                ORDER BY tlid
             ) deduplicated
+            WHERE rn = 1
         """)
         
         geocoder_count = target_conn.execute("SELECT COUNT(*) FROM geocoder").fetchone()[0]
@@ -199,18 +213,25 @@ def convert_to_degauss(
         
         target_conn.execute(f"""
             INSERT INTO street_names
-            SELECT DISTINCT
-                f.tlid,
-                f.fullname,
-                f.name,
-                f.predirabrv,
-                f.pretypabrv,
-                f.suftypabrv,
-                f.sufdirabrv,
-                compute_metaphone(f.name, 5) as name_metaphone,
-                compute_metaphone(f.fullname, 5) as fullname_metaphone
-            FROM source_db.main.featnames f
-            {where_clause_featnames}
+            SELECT 
+                tlid,
+                fullname,
+                name,
+                predirabrv,
+                pretypabrv,
+                suftypabrv,
+                sufdirabrv,
+                compute_metaphone(name, 5) as name_metaphone,
+                compute_metaphone(fullname, 5) as fullname_metaphone
+            FROM (
+                SELECT 
+                    tlid, fullname, name, predirabrv, 
+                    pretypabrv, suftypabrv, sufdirabrv,
+                    ROW_NUMBER() OVER (PARTITION BY tlid, fullname ORDER BY tlid) as rn
+                FROM source_db.main.featnames
+                {where_clause_featnames}
+            ) f
+            WHERE rn = 1
         """)
         
         names_count = target_conn.execute("SELECT COUNT(*) FROM street_names").fetchone()[0]
