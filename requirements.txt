@@ -31,3 +31,6 @@ jupyter
 ipywidgets
 nbconvert
 matplotlib
+
+# Progress bars (optimization #9)
+tqdm
