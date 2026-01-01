@@ -17,11 +17,10 @@ import duckdb
 import jellyfish
 from pathlib import Path
 from typing import Optional
-import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-logger = logging.getLogger(__name__)
+from tiger_utils.utils.logger import get_logger
+
+logger = get_logger()
 
 
 def create_degauss_schema(conn: duckdb.DuckDBPyConnection):

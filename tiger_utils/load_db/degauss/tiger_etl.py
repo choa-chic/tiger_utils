@@ -12,7 +12,6 @@ This is significantly more efficient than the temp-table-based approach:
 - Clear data flow: read -> transform -> insert
 """
 
-import logging
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional, Set
@@ -24,9 +23,10 @@ try:
 except ImportError:
     raise ImportError("tiger_etl requires: pip install fiona shapely")
 
+from tiger_utils.utils.logger import get_logger
 from .phonetics import compute_metaphone
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 class TigerETL:

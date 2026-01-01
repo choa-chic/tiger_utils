@@ -11,7 +11,6 @@ Key differences from C shp2sqlite:
 - Provides progress tracking
 """
 
-import logging
 import sqlite3
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Any
@@ -26,7 +25,9 @@ except ImportError:
         "shp_to_sqlite requires: pip install fiona shapely"
     )
 
-logger = logging.getLogger(__name__)
+from tiger_utils.utils.logger import get_logger
+
+logger = get_logger()
 
 
 class ShapefileToSQLiteConverter:

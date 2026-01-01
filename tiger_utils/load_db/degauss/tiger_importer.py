@@ -11,7 +11,6 @@ Orchestrates TIGER/Line data import to SQLite following the degauss geocoder wor
 This replicates the C shp2sqlite + bash tiger_import workflow in pure Python.
 """
 
-import logging
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -19,11 +18,12 @@ from typing import Optional, List, Set
 import shutil
 import re
 
+from tiger_utils.utils.logger import get_logger
 from .db_setup import create_schema, create_indexes, load_place_data
 from .tiger_etl import TigerETL
 from ..unzipper import unzip_all
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 class TigerImporter:
@@ -70,10 +70,6 @@ class TigerImporter:
 
         if not self.source_dir.exists():
             raise FileNotFoundError(f"Source directory not found: {self.source_dir}")
-
-        # Configure logging
-        level = logging.DEBUG if verbose else logging.INFO
-        logging.basicConfig(level=level)
 
     def import_all(self, counties: Optional[List[str]] = None) -> None:
         """

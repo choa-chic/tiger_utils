@@ -10,12 +10,13 @@ Creates SQLite tables and indexes following the degauss-org/geocoder schema:
 
 Mirrors build/sql/{create,setup,index}.sql from degauss-org/geocoder.
 """
-import logging
 import sqlite3
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from tiger_utils.utils.logger import get_logger
+
+logger = get_logger()
 
 
 def create_schema(db_path: Optional[str] = None) -> None:

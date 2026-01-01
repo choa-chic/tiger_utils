@@ -9,11 +9,11 @@ Usage:
 """
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 from typing import Optional, List
 
+from tiger_utils.utils.logger import get_logger, setup_logger
 from .db_setup import create_schema, create_indexes
 from .tiger_importer import TigerImporter
 
@@ -94,11 +94,7 @@ def confirm_database_action(db_path: Path) -> str:
 
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    setup_logger()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -218,7 +214,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             parser.error("--state must be a 2-digit FIPS code (e.g., 06)")
 
     setup_logging(args.verbose)
-    logger = logging.getLogger(__name__)
+    logger = get_logger()
 
     try:
         # Validate paths
