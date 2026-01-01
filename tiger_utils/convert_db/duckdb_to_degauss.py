@@ -62,7 +62,7 @@ def create_degauss_schema(conn: duckdb.DuckDBPyConnection):
             fid INTEGER PRIMARY KEY,
             street VARCHAR(100),
             street_phone VARCHAR(5),
-            paflag BOOLEAN,
+            paflag VARCHAR(1),
             zip VARCHAR(5)
         );
     """)
@@ -216,7 +216,7 @@ def convert_to_degauss(
                 ROW_NUMBER() OVER (ORDER BY fullname, zip) as fid,
                 fullname as street,
                 compute_metaphone(name, 5) as street_phone,
-                (paflag = 'P') as paflag,
+                paflag,
                 zip
             FROM source_db.main.featnames f
             JOIN linezip l ON f.tlid = l.tlid
