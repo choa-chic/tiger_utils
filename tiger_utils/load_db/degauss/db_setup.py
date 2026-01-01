@@ -33,9 +33,9 @@ def create_schema(db_path: Optional[str] = None) -> None:
         db_path: Path to SQLite database. If None, uses default location.
     """
     if db_path is None:
-        # Default: project_root / database / degauss / geocoder.db
+        # Default: project_root / database / geocoder.db
         project_root = Path(__file__).resolve().parents[3]
-        db_path = project_root / "database" / "degauss" / "geocoder.db"
+        db_path = project_root / "database" / "geocoder.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
     db_path = Path(db_path)
@@ -137,9 +137,9 @@ def create_indexes(db_path: Optional[str] = None) -> None:
         db_path: Path to SQLite database. If None, uses default location.
     """
     if db_path is None:
-        # Default: project_root / database / degauss / geocoder.db
+        # Default: project_root / database / geocoder.db
         project_root = Path(__file__).resolve().parents[3]
-        db_path = project_root / "database" / "degauss" / "geocoder.db"
+        db_path = project_root / "database" / "geocoder.db"
 
     db_path = Path(db_path)
 

@@ -5,8 +5,17 @@ Unzips all .zip files in a directory to a specified output directory.
 import os
 import zipfile
 from pathlib import Path
+from typing import Optional
 
-def unzip_all(input_dir: str, output_dir: str, recursive: bool = False, state: str = None, shape_type: str = None) -> None:
+
+def unzip_all(
+    input_dir: str,
+    output_dir: str,
+    recursive: bool = False,
+    state: Optional[str] = None,
+    shape_type: Optional[str] = None,
+    year: Optional[str] = None,
+) -> None:
     """
     Unzips all .zip files in input_dir to output_dir.
     Supports recursive search and filtering by state FIPS and shape type.
@@ -27,6 +36,10 @@ def unzip_all(input_dir: str, output_dir: str, recursive: bool = False, state: s
             # e.g., tl_2025_30_ or tl_2025_030_ or tl_2025_30001_
             match = re.search(r"tl_\d{4}_(0?%s)[0-9]{3}_" % re.escape(state), name)
             if not match:
+                continue
+        if year:
+            # Require matching year after tl_
+            if not re.match(rf"tl_{re.escape(year)}_", name):
                 continue
         if shape_type and shape_type not in name:
             continue

@@ -260,40 +260,14 @@ Typical performance on modern hardware:
 - Use WAL mode for concurrent access
 - Create additional indexes for custom queries
 
-## Next Steps
-
-1. **[Read the full documentation](./tiger_utils/load_db/degauss/README.md)**
-2. **[Review the implementation details](./DEGAUSS_IMPLEMENTATION.md)**
-3. **[See the mapping to original degauss](./DEGAUSS_MAPPING.md)**
-
-## Questions?
-
-See the detailed documentation in:
-- `tiger_utils/load_db/degauss/README.md` - Full API reference
-- `DEGAUSS_IMPLEMENTATION.md` - Implementation overview
-- `DEGAUSS_MAPPING.md` - Mapping to original C/Bash code
-
 ## Example: Complete Workflow
 
 ```python
 # 1. Download TIGER data
-from tiger_utils.download.downloader import download_county_data
-import asyncio
-
-asyncio.run(download_county_data(
-    state_fips="06",
-    year=2025,
-    output_dir="tiger_data/2025",
-    dataset_types=["EDGES", "FEATNAMES", "ADDR"],
-))
+TODO: demonstrate cli use
 
 # 2. Load to SQLite
-from tiger_utils.load_db.degauss import import_tiger_data
-
-import_tiger_data(
-    db_path='geocoder.db',
-    source_dir='tiger_data/2025/',
-)
+TODO
 
 # 3. Query the database
 import sqlite3

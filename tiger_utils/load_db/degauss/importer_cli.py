@@ -14,7 +14,13 @@ import sys
 from pathlib import Path
 from typing import Optional, List
 
+from .db_setup import create_schema, create_indexes
 from .tiger_importer import TigerImporter
+
+
+def get_default_db_path() -> Path:
+    """Return project-root database path (database/geocoder.db)."""
+    return Path(__file__).resolve().parents[3] / "database" / "geocoder.db"
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -44,18 +50,32 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser.add_argument(
         "database",
-        help="Path to SQLite database (will be created if not exists)",
+        nargs="?",
+        help="Path to SQLite database (default: project_root/database/geocoder.db)",
     )
 
     parser.add_argument(
         "source",
-        help="Directory containing TIGER/Line zip files or extracted files",
+        nargs="?",
+        help="Directory containing TIGER/Line zip files or extracted files (default: project_root/tiger_data)",
     )
 
     parser.add_argument(
         "counties",
         nargs="*",
         help="County FIPS codes to import (e.g., 06001 06007). If not specified, auto-detect from files.",
+    )
+
+    parser.add_argument(
+        "--year",
+        dest="year",
+        help="TIGER/Line vintage (e.g., 2025) to filter zip files",
+    )
+
+    parser.add_argument(
+        "--state",
+        dest="state",
+        help="Filter to a 2-digit state FIPS (e.g., 06)",
     )
 
     parser.add_argument(
@@ -71,13 +91,48 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     parser.add_argument(
+        "--init-db",
+        action="store_true",
+        help="Initialize database schema/indexes and exit (skip import)",
+    )
+
+    parser.add_argument(
+        "--no-recursive",
+        dest="recursive",
+        action="store_false",
+        default=True,
+        help="Disable recursive search in source directory (default: recursive on)",
+    )
+
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
         help="Enable verbose debug output",
     )
 
+    project_root = Path(__file__).resolve().parents[3]
+    default_db_path = get_default_db_path()
+    default_source_path = project_root / "tiger_data"
     args = parser.parse_args(argv)
+
+    # Fill defaults when omitted
+    if args.source is None:
+        args.source = str(default_source_path)
+    if args.database is None:
+        args.database = str(default_db_path)
+
+    # Normalize year to 4-digit string if provided
+    if args.year:
+        args.year = str(args.year)
+        if not args.year.isdigit() or len(args.year) != 4:
+            parser.error("--year must be a 4-digit year (e.g., 2025)")
+
+    # Normalize state to 2-digit FIPS if provided
+    if args.state:
+        args.state = str(args.state).zfill(2)
+        if not args.state.isdigit() or len(args.state) != 2:
+            parser.error("--state must be a 2-digit FIPS code (e.g., 06)")
 
     setup_logging(args.verbose)
     logger = logging.getLogger(__name__)
@@ -91,14 +146,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             logger.error(f"Source directory not found: {source_dir}")
             return 1
 
-        logger.info(f"Importing TIGER/Line data to {db_path}")
+        logger.info(f"Import target: {db_path}")
         logger.info(f"Source directory: {source_dir}")
+        if args.year:
+            logger.info(f"Filtering year: {args.year}")
+
+        if args.init_db:
+            create_schema(str(db_path))
+            create_indexes(str(db_path))
+            logger.info("Database initialized; exiting (--init-db)")
+            return 0
 
         # Create importer
         importer = TigerImporter(
             db_path=str(db_path),
             source_dir=str(source_dir),
             temp_dir=args.temp_dir,
+            state=args.state,
+            year=args.year,
+            recursive=args.recursive,
             batch_size=args.batch_size,
             verbose=args.verbose,
         )
@@ -127,59 +193,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-    # Clean up
-    if hasattr(sys, '_importer_state'):
-        del sys._importer_state
-    if hasattr(sys, '_importer_shape_type'):
-        del sys._importer_shape_type
-    print(f"Import complete. Database at {db_path}")
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="TIGER/Line to SQLite/SpatiaLite importer.")
-    subparsers = parser.add_subparsers(dest="command", required=False)
-
-    # All-in-one import
-    parser_all = subparsers.add_parser("all", help="Run full import: unzip, schema, indexes, shapefiles")
-    parser_all.add_argument("zip_dir", help="Directory containing TIGER/Line zip files")
-    parser_all.add_argument("--db", dest="db_path", default="geocoder.db", help="Output SQLite DB path (default: geocoder.db)")
-    parser_all.add_argument("--tmp", dest="temp_dir", default="_tiger_tmp", help="Temp directory for unzipped files")
-    parser_all.add_argument("--recursive", action="store_true", help="Recursively search for zip files")
-    parser_all.add_argument("--state", dest="state", default=None, help="State FIPS code to filter zip files (e.g., 13)")
-    parser_all.add_argument("--type", dest="shape_type", default=None, help="Shape type to filter zip files (e.g., edges, faces)")
-
-    # Unzip only
-    parser_unzip = subparsers.add_parser("unzip", help="Unzip TIGER/Line zip files")
-    parser_unzip.add_argument("zip_dir", help="Directory containing TIGER/Line zip files")
-    parser_unzip.add_argument("out_dir", help="Output directory for unzipped files")
-    parser_unzip.add_argument("--recursive", action="store_true", help="Recursively search for zip files")
-    parser_unzip.add_argument("--state", dest="state", default=None, help="State FIPS code to filter zip files (e.g., 13)")
-    parser_unzip.add_argument("--type", dest="shape_type", default=None, help="Shape type to filter zip files (e.g., edges, faces)")
-
-    # Schema only
-    parser_schema = subparsers.add_parser("schema", help="Create database schema")
-    parser_schema.add_argument("--db", dest="db_path", default="geocoder.db", help="Output SQLite DB path (default: geocoder.db)")
-
-    # Indexes only
-    parser_indexes = subparsers.add_parser("indexes", help="Create database indexes")
-    parser_indexes.add_argument("--db", dest="db_path", default="geocoder.db", help="Output SQLite DB path (default: geocoder.db)")
-
-    # Import shapefiles only
-    parser_shp = subparsers.add_parser("shp", help="Import shapefiles into database")
-    parser_shp.add_argument("shp_dir", help="Directory containing .shp files (unzipped)")
-    parser_shp.add_argument("--db", dest="db_path", default="geocoder.db", help="Output SQLite DB path (default: geocoder.db)")
-
-    args = parser.parse_args()
-
-    if args.command == "all":
-        import_tiger(args.zip_dir, args.db_path, args.temp_dir, recursive=args.recursive, state=args.state, shape_type=args.shape_type)
-    elif args.command == "unzip":
-        run_unzip(args.zip_dir, args.out_dir, recursive=args.recursive, state=args.state, shape_type=args.shape_type)
-    elif args.command == "schema":
-        run_schema(args.db_path)
-    elif args.command == "indexes":
-        run_indexes(args.db_path)
-    elif args.command == "shp":
-        run_shp_import(args.shp_dir, args.db_path)
-    else:
-        parser.print_help()

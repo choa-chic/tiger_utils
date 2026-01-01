@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List, Set
 import shutil
+import re
 
 from .shp_to_sqlite import ShapefileToSQLiteConverter
 from .db_setup import create_schema, create_indexes
@@ -46,6 +47,9 @@ class TigerImporter:
         db_path: str,
         source_dir: str,
         temp_dir: Optional[str] = None,
+        state: Optional[str] = None,
+        year: Optional[str] = None,
+        recursive: bool = True,
         batch_size: int = 1000,
         verbose: bool = False,
     ):
@@ -62,6 +66,9 @@ class TigerImporter:
         self.db_path = Path(db_path)
         self.source_dir = Path(source_dir)
         self.temp_dir = Path(temp_dir) if temp_dir else Path(tempfile.gettempdir())
+        self.state = state
+        self.year = year
+        self.recursive = recursive
         self.batch_size = batch_size
         self.verbose = verbose
 
@@ -154,27 +161,49 @@ class TigerImporter:
         """
         counties: Set[str] = set()
 
-        # Look for patterns: tl_YYYY_COUNTYFIPS_edges.zip
-        for pattern in ["tl_*_edges.zip", "tl_*_*_edges.zip"]:
-            for file_path in self.source_dir.glob(pattern):
-                # Extract county code from filename
-                # Format: tl_YYYY_COUNTYFIPS_edges.zip or tl_YYYY_COUNTYFIPS_NAME.zip
-                parts = file_path.stem.split("_")
-                if len(parts) >= 3:
-                    # County code is typically the 3rd or later component
-                    # Try to find numeric FIPS code (5 digits)
-                    for part in parts[2:]:
-                        if part.isdigit() and len(part) == 5:
-                            counties.add(part)
-                            break
+        iterator = self.source_dir.rglob("*.zip") if self.recursive else self.source_dir.glob("*.zip")
+        year_filter = self.year
+        state_filter = self.state
+
+        for file_path in iterator:
+            name = file_path.stem.lower()
+
+            # Enforce year if provided
+            if year_filter and f"tl_{year_filter}_" not in name:
+                continue
+
+            # Extract county from standard TIGER naming: tl_YYYY_SSSCC_edges
+            m = re.search(r"tl_(\d{4})_(\d{5})", name)
+            county_code = None
+            if m:
+                county_code = m.group(2)
+                file_state = county_code[:2]
+                if state_filter and file_state != state_filter:
+                    continue
+            else:
+                # Fallback: look for any 5-digit numeric chunk
+                for chunk in name.split("_"):
+                    if chunk.isdigit() and len(chunk) == 5:
+                        county_code = chunk
+                        if state_filter and county_code[:2] != state_filter:
+                            county_code = None
+                            continue
+                        break
+
+            if not county_code:
+                continue
+
+            counties.add(county_code)
 
         if not counties:
             raise ValueError(
                 f"No TIGER/Line files found in {self.source_dir}. "
                 "Expected patterns: tl_*_*_edges.zip"
             )
-
-        return sorted(list(counties))
+        filtered = counties
+        if self.state:
+            filtered = {c for c in counties if c.startswith(self.state)}
+        return sorted(list(filtered))
 
     def _extract_county_files(self, county_code: str, work_dir: Path) -> None:
         """
@@ -191,8 +220,9 @@ class TigerImporter:
         unzip_all(
             input_dir=str(self.source_dir),
             output_dir=str(work_dir),
-            recursive=False,
-            state=county_code[:2],  # Extract state FIPS from county code
+            recursive=self.recursive,
+            state=self.state or county_code[:2],
+            year=self.year,
         )
 
         # unzipper extracts to subdirectories; flatten by moving files
@@ -432,6 +462,9 @@ def import_tiger_data(
     db_path: str,
     source_dir: str,
     counties: Optional[List[str]] = None,
+    state: Optional[str] = None,
+    year: Optional[str] = None,
+    recursive: bool = True,
     verbose: bool = False,
 ) -> None:
     """
@@ -446,6 +479,9 @@ def import_tiger_data(
     importer = TigerImporter(
         db_path=db_path,
         source_dir=source_dir,
+        state=state,
+        year=year,
+        recursive=recursive,
         verbose=verbose,
     )
     importer.import_all(counties)

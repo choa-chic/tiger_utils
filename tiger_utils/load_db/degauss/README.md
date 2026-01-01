@@ -10,7 +10,20 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 uv pip install -r requirements.txt
 ```
 
+## Initialize a new geocoder database
+```sh
+python -m tiger_utils.load_db.degauss.importer_cli --init-db
+```
 
+## Import TIGER/Line shapefiles, optionally by year and/or state FIPS
+```sh
+python -m tiger_utils.load_db.degauss.importer_cli /data/tiger --state 13 --year 2025
+```
+
+## Import all available TIGER/Line shapefiles in a directory for a given year
+```sh
+python -m tiger_utils.load_db.degauss.importer_cli --year 2025
+```
 
 ## Overview
 
