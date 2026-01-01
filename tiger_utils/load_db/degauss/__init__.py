@@ -1,23 +1,43 @@
 """
-degauss: TIGER/Line to SQLite/SpatiaLite loader
+degauss - Python implementation of degauss-org/geocoder for TIGER/Line to SQLite import.
 
-This package provides a modular, scriptable, and CLI-driven workflow for building a spatially-enabled SQLite database from TIGER/Line shapefiles, inspired by the DeGAUSS project.
-
-Main entry point: importer.py (see CLI usage)
+A modular, cross-platform replacement for the C+Bash degauss geocoder that loads
+TIGER/Line shapefiles into SQLite with proper schema and indexes.
 
 Modules:
-	- importer: Orchestrates unzip, schema, index, and shapefile import
-	- db_setup: Schema and index creation
-	- unzipper: Unzips TIGER/Line zip files
-	- shp_to_sqlite: Loads shapefiles into SpatiaLite-enabled SQLite tables
+- shp_to_sqlite: Convert ESRI shapefiles to SQLite with WKB geometry
+- tiger_importer: Orchestrate TIGER/Line import (replicates bash tiger_import)
+- db_setup: Create schema and indexes matching degauss conventions
+- importer_cli: Command-line interface
 
-For CLI usage, run:
-	python -m tiger_utils.load_db.degauss.importer --help
+CLI Usage:
+    python -m tiger_utils.load_db.degauss.importer_cli /path/to/geocoder.db /path/to/tiger/
+
+Library Usage:
+    from tiger_utils.load_db.degauss import import_tiger_data
+    import_tiger_data('/data/geocoder.db', '/data/tiger/', counties=['06001'])
+
+See load_db.py for high-level API.
 """
 
-# Avoid star imports to prevent circular import issues.
-# Only import modules, not symbols, to avoid triggering circular imports.
-from . import importer
+from .load_db import (
+    ShapefileToSQLiteConverter,
+    convert_shapefile,
+    TigerImporter,
+    import_tiger_data,
+    create_schema,
+    create_indexes,
+)
+
+__all__ = [
+    "ShapefileToSQLiteConverter",
+    "convert_shapefile",
+    "TigerImporter",
+    "import_tiger_data",
+    "create_schema",
+    "create_indexes",
+]
+
 from . import db_setup
 from . import shp_to_sqlite
 # Do NOT import unzipper here to avoid circular import (imported at higher level)
