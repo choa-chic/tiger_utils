@@ -8,6 +8,7 @@ psycopg[binary]; platform_system == "Linux"
 fiona
 shapely
 dbfread
+geopandas
 
 # http
 httpx
@@ -23,3 +24,4 @@ pytest-cov
 pandas
 jupyter
 nbconvert
+matplotlib

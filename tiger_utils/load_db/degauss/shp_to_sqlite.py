@@ -1,92 +1,100 @@
 """
 shp_to_sqlite.py
-Loads shapefiles into a SQLite database table using fiona and sqlite3.
+Loads shapefiles into SQLite staging tables using the DeGAUSS ETL pattern.
+
+This module implements the first phase of the DeGAUSS import workflow:
+1. Load raw shapefile data into temporary staging tables (tiger_*)
+2. Subsequent SQL scripts (convert.sql, etc.) transform staging tables to final schema
+
+See convert.sql for the transformation logic that normalizes raw TIGER/Line data
+and creates the final edge, feature, feature_edge, and range tables.
 """
 
-
-import os
 import sqlite3
 from pathlib import Path
 import fiona
-from fiona import BytesCollection
 from shapely.geometry import shape
-import binascii
-from tiger_utils.load_db import unzipper
+
 
 def shp_to_sqlite(shp_path: str, db_path: str, table_name: str) -> None:
     """
-    Loads a shapefile into a SpatiaLite-enabled SQLite table. Table is created if it does not exist.
-    Geometry is stored as WKB in a 'geometry' column (BLOB).
-    Adds spatial metadata if needed.
+    Loads a shapefile or DBF file into a staging table with raw data.
+    
+    This follows the DeGAUSS pattern: stage raw data, then transform via SQL.
+    
+    Args:
+        shp_path: Path to the shapefile or DBF file to load
+        db_path: Path to the SQLite database
+        table_name: Name for the staging table (raw data, unchanged)
+    
+    Notes:
+        - Geometry is stored as WKB (binary) in a 'the_geom' column
+        - All other columns are loaded as-is from the shapefile
+        - Table is created if it does not exist
+        - The table name should include the 'tiger_' prefix (e.g., tiger_edges, tiger_addr)
     """
-    import shapely.wkb
-    import shapely.geometry
-    import shapely
     with fiona.open(shp_path) as src:
-        fields = src.schema['properties']
-        # Map Fiona/OGR types to SQLite types
+        fields = src.schema["properties"]
+        has_geometry = src.schema.get("geometry") is not None and src.schema.get("geometry") != "None"
+        
+        # Map OGR types to SQLite types
         def ogr_to_sqlite_type(ogr_type):
-            if ogr_type.startswith('int'):
-                return 'INTEGER'
-            elif ogr_type.startswith('float') or ogr_type.startswith('double') or ogr_type.startswith('real'):
-                return 'REAL'
-            elif ogr_type.startswith('date'):
-                return 'TEXT'
+            """Convert Fiona/OGR type names to SQLite type names."""
+            if ogr_type.startswith("int"):
+                return "INTEGER"
+            elif ogr_type.startswith(("float", "double", "real")):
+                return "REAL"
             else:
-                return 'TEXT'
+                return "TEXT"
+        
+        # Build column definitions from shapefile schema
         columns = list(fields.keys())
-        col_defs = ', '.join([f'"{col}" {ogr_to_sqlite_type(fields[col])}' for col in columns])
-        # Geometry column as BLOB
-        col_defs += ', geometry BLOB'
-        # Connect to SQLite and load SpatiaLite
+        col_defs = ", ".join(
+            [f'"{col}" {ogr_to_sqlite_type(fields[col])}' for col in columns]
+        )
+        
+        # Add geometry column for spatial data
+        if has_geometry:
+            col_defs += ', the_geom BLOB'
+        
+        # Connect to database and create staging table
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
-        # Enable extension loading explicitly
-        try:
-            conn.enable_load_extension(True)
-        except Exception:
-            print("Warning: Could not enable extension loading on this SQLite connection.")
-        loaded_spatialite = False
-        try:
-            cur.execute("SELECT load_extension('mod_spatialite')")
-            loaded_spatialite = True
-        except Exception:
-            try:
-                cur.execute("SELECT load_extension('libspatialite')")
-                loaded_spatialite = True
-            except Exception:
-                print("Warning: Could not load SpatiaLite extension. Proceeding without spatial index support.")
-        # Initialize spatial metadata if needed
-        if loaded_spatialite:
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='geometry_columns'")
-            if not cur.fetchone():
-                cur.execute("SELECT InitSpatialMetadata(1)")
-        # Create table if not exists
-        create_sql = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({col_defs});'
+        
+        # Drop table if it exists to ensure clean load (staging tables are recreated each run)
+        cur.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        
+        create_sql = f'CREATE TABLE "{table_name}" ({col_defs});'
         cur.execute(create_sql)
-        # Register geometry column
-        if loaded_spatialite:
-            cur.execute(f"SELECT RecoverGeometryColumn('{table_name}', 'geometry', {src.crs['init'].split(':')[1] if src.crs and 'init' in src.crs else 4326}, '{src.schema['geometry']}', 2)")
-        # Insert features
-        insert_sql = f'INSERT INTO "{table_name}" ({', '.join(columns)}, geometry) VALUES ({', '.join(['?']*(len(columns)+1))});'
+        
+        # Build and execute INSERT statements for all features
+        if has_geometry:
+            placeholders = ", ".join(["?"] * (len(columns) + 1))
+            insert_sql = f'INSERT INTO "{table_name}" ({", ".join(columns)}, the_geom) VALUES ({placeholders})'
+        else:
+            placeholders = ", ".join(["?"] * len(columns))
+            insert_sql = f'INSERT INTO "{table_name}" ({", ".join(columns)}) VALUES ({placeholders})'
+        
+        row_count = 0
         for feat in src:
-            values = [feat['properties'].get(f, None) for f in columns]
-            if feat['geometry']:
-                geom = shape(feat['geometry'])
-                wkb = geom.wkb
-            else:
-                wkb = None
-            values.append(wkb)
+            values = [feat["properties"].get(col, None) for col in columns]
+            
+            if has_geometry:
+                if feat["geometry"]:
+                    geom = shape(feat["geometry"])
+                    wkb = geom.wkb
+                else:
+                    wkb = None
+                values.append(wkb)
+            
             cur.execute(insert_sql, values)
+            row_count += 1
+        
         conn.commit()
-        # Optionally, create spatial index
-        if loaded_spatialite:
-            try:
-                cur.execute(f"SELECT CreateSpatialIndex('{table_name}', 'geometry')")
-            except Exception:
-                print(f"Warning: Could not create spatial index for {table_name}.")
         conn.close()
-        print(f"Loaded {shp_path} into {table_name} in {db_path} (spatially enabled: {loaded_spatialite})")
-
-if __name__ == "__main__":
-    print("This module is not intended to be run directly. Use importer.py as the CLI entry point for all workflows.")
+        
+        geom_type = "spatial" if has_geometry else "non-spatial"
+        print(
+            f"Loaded {row_count} records from {Path(shp_path).name} "
+            f"({geom_type}) into {table_name}"
+        )
