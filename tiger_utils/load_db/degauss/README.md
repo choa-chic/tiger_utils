@@ -354,20 +354,21 @@ For very large counties:
 | File | build/tiger_import | tiger_importer.py + importer_cli.py |
 | File | build/sql/*.sql | db_setup.py |
 | Dependency | libshp, PostGIS, SQL | fiona, shapely |
-| Metaphone | C code in SQL | Python (HEX encoding) |
+| Metaphone | C code in SQL | Python (Double Metaphone via metaphone pkg) |
 | Geometry | PostGIS WKT/WKB | Shapely WKB |
 | Temp Tables | SQL temporary tables | SQLite TEMPORARY |
 | Indexes | Separate index.sql | create_indexes() |
 
 ## Notes on Metaphone Encoding
 
-The original degauss geocoder uses SQL metaphone() functions. This implementation:
+The original degauss geocoder uses SQL metaphone() functions. This implementation now:
 
-1. Substitutes HEX encoding of full street name as phonetic code
-2. Stores in `feature.street_phone` column
-3. Allows case-insensitive substring matching
+1. Uses a Python UDF backed by `metaphone.doublemetaphone()` to compute phonetic codes
+2. Truncates codes to 5 characters to mirror `metaphone(name, 5)` in the SQL workflow
+3. Registers the UDF with SQLite so downstream SQL continues to work unchanged
 
-This simplifies deployment (no custom SQL functions) while maintaining search capability.
+This preserves deployment simplicity (no compiled SQLite extensions) while matching the
+intended metaphone behavior.
 
 ## License & Attribution
 

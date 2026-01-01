@@ -13,12 +13,14 @@ def unzip_all(
     output_dir: str,
     recursive: bool = False,
     state: Optional[str] = None,
+    county: Optional[str] = None,
     shape_type: Optional[str] = None,
     year: Optional[str] = None,
 ) -> None:
     """
     Unzips all .zip files in input_dir to output_dir.
     Supports recursive search and filtering by state FIPS and shape type.
+    When county is provided, restricts to 5-digit county FIPS in the filename.
     """
     input_path = Path(input_dir)
     output_path = Path(output_dir)
@@ -36,6 +38,10 @@ def unzip_all(
             # e.g., tl_2025_30_ or tl_2025_030_ or tl_2025_30001_
             match = re.search(r"tl_\d{4}_(0?%s)[0-9]{3}_" % re.escape(state), name)
             if not match:
+                continue
+        if county:
+            # Require a 5-digit county code chunk in the expected position
+            if not re.search(rf"tl_\d{{4}}_{re.escape(county)}_", name):
                 continue
         if year:
             # Require matching year after tl_

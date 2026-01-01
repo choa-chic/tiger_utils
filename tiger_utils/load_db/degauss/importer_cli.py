@@ -67,6 +67,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     parser.add_argument(
+        "--counties",
+        dest="counties_flag",
+        help="Comma-separated county FIPS list (e.g., 06001,06007). Overrides positional counties.",
+    )
+
+    parser.add_argument(
         "--year",
         dest="year",
         help="TIGER/Line vintage (e.g., 2025) to filter zip files",
@@ -121,6 +127,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.source = str(default_source_path)
     if args.database is None:
         args.database = str(default_db_path)
+
+    # Normalize comma-delimited counties flag
+    if args.counties_flag:
+        args.counties = [c.strip() for c in args.counties_flag.split(",") if c.strip()]
 
     # Normalize year to 4-digit string if provided
     if args.year:

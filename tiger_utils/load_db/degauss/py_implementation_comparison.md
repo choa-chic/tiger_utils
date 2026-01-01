@@ -184,7 +184,7 @@ def _transform_and_load(self, county_code: str) -> None:
 ```
 
 **Key Differences**:
-- SQL `metaphone(name, 5)` → Python `HEX(fullname)` (simplified phonetic)
+- SQL `metaphone(name, 5)` → Python UDF `metaphone_py(fullname, 5)` powered by `metaphone.doublemetaphone`
 - SQL `digit_suffix(fromhn)` → Python CAST + SUBSTR
 - SQL uses temporary tables → Python uses CREATE TEMPORARY TABLE
 - SQL uses compress_wkb_line() → Python stores WKB directly

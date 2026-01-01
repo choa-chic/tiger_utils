@@ -20,6 +20,10 @@ bs4
 pytest
 pytest-cov
 
+# Phonetic encoding
+jellyfish
+Metaphone
+
 # Data analysis and visualization
 pandas
 jupyter

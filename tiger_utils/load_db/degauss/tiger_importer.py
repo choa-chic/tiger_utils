@@ -19,8 +19,8 @@ from typing import Optional, List, Set
 import shutil
 import re
 
-from .shp_to_sqlite import ShapefileToSQLiteConverter
-from .db_setup import create_schema, create_indexes
+from .db_setup import create_schema, create_indexes, load_place_data
+from .tiger_etl import TigerETL
 from ..unzipper import unzip_all
 
 logger = logging.getLogger(__name__)
@@ -37,10 +37,6 @@ class TigerImporter:
     - feature_edge: Links features to edges
     - range: Address ranges with side (L/R)
     """
-
-    # File patterns and dataset types
-    SHAPEFILE_TYPES = {"edges"}  # .shp files with geometry
-    DBF_TYPES = {"featnames", "addr"}  # .dbf files (attributes only)
 
     def __init__(
         self,
@@ -90,6 +86,9 @@ class TigerImporter:
         # Initialize database schema
         self._init_database()
 
+        # Load place gazetteer if not already present
+        load_place_data(str(self.db_path))
+
         # Discover counties to import
         if counties is None:
             counties = self._discover_counties()
@@ -121,27 +120,69 @@ class TigerImporter:
             # Extract county files
             self._extract_county_files(county_code, work_dir)
 
-            # Load shapefile with geometry (edges)
-            for shp_type in self.SHAPEFILE_TYPES:
-                shp_files = list(work_dir.glob(f"*_{shp_type}.shp"))
-                for shp_file in shp_files:
-                    logger.debug(f"Loading shapefile: {shp_file.name}")
-                    self._load_shapefile(shp_file, f"tiger_{shp_type}", county_code)
+            # Find EDGES, FEATNAMES, ADDR files
+            edges_shp = self._find_file(work_dir, "*_EDGES.shp")
+            featnames_dbf = self._find_file(work_dir, "*_FEATNAMES.dbf")
+            addr_dbf = self._find_file(work_dir, "*_ADDR.dbf")
 
-            # Load DBF files (attributes only)
-            for dbf_type in self.DBF_TYPES:
-                dbf_files = list(work_dir.glob(f"*_{dbf_type}.dbf"))
-                for dbf_file in dbf_files:
-                    logger.debug(f"Loading DBF file: {dbf_file.name}")
-                    self._load_dbf_file(dbf_file, f"tiger_{dbf_type}", county_code)
+            if not all([edges_shp, featnames_dbf, addr_dbf]):
+                missing = []
+                if not edges_shp:
+                    missing.append("EDGES.shp")
+                if not featnames_dbf:
+                    missing.append("FEATNAMES.dbf")
+                if not addr_dbf:
+                    missing.append("ADDR.dbf")
+                raise FileNotFoundError(
+                    f"Missing required files for {county_code}: {', '.join(missing)}"
+                )
 
-            # Transform and load data
-            self._transform_and_load(county_code)
+            # Process county with in-memory ETL
+            etl = TigerETL(
+                db_path=str(self.db_path),
+                batch_size=self.batch_size,
+                verbose=self.verbose,
+            )
+            etl.process_county(edges_shp, featnames_dbf, addr_dbf, county_code)
 
         finally:
             # Clean up temporary files
             if work_dir.exists():
                 shutil.rmtree(work_dir)
+
+    def _drop_temp_tables(self) -> None:
+        """Drop temp tables from prior runs to avoid table-exists conflicts."""
+        conn = sqlite3.connect(str(self.db_path))
+        cur = conn.cursor()
+        try:
+            for tbl in [
+                "feature_bin",
+                "linezip",
+                "tiger_addr",
+                "tiger_featnames",
+                "tiger_edges",
+            ]:
+                cur.execute(f"DROP TABLE IF EXISTS {tbl};")
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+
+    def _find_file(self, directory: Path, pattern: str) -> Optional[Path]:
+        """
+        Find a file matching pattern in directory.
+
+        Args:
+            directory: Directory to search
+            pattern: Glob pattern (e.g., "*_EDGES.shp")
+
+        Returns:
+            Path to first matching file, or None
+        """
+        matches = list(directory.glob(pattern))
+        if matches:
+            return matches[0]
+        return None
 
     def _init_database(self) -> None:
         """Initialize database schema and create required tables."""
@@ -222,6 +263,7 @@ class TigerImporter:
             output_dir=str(work_dir),
             recursive=self.recursive,
             state=self.state or county_code[:2],
+            county=county_code,
             year=self.year,
         )
 
@@ -258,198 +300,6 @@ class TigerImporter:
                         if not dest.exists():
                             dest.symlink_to(file_path)
                             logger.debug(f"Linked {file_path.name}")
-
-    def _load_shapefile(self, shp_path: Path, table_name: str, county_code: str) -> None:
-        """
-        Load shapefile with geometry into temporary table.
-
-        Args:
-            shp_path: Path to .shp file
-            table_name: Temporary table name (e.g., "tiger_edges")
-            county_code: County code (for logging)
-        """
-        converter = ShapefileToSQLiteConverter(
-            db_path=str(self.db_path),
-            table_name=table_name,
-            batch_size=self.batch_size,
-            geometry_column="the_geom",
-            simple_geometries=False,
-            append_mode=False,  # Create new temp table
-        )
-        converter.load_shapefile(str(shp_path))
-        logger.debug(f"Loaded {shp_path.name} into {table_name}")
-
-    def _load_dbf_file(self, dbf_path: Path, table_name: str, county_code: str) -> None:
-        """
-        Load DBF file (attributes only) into temporary table.
-
-        Args:
-            dbf_path: Path to .dbf file
-            table_name: Temporary table name (e.g., "tiger_featnames")
-            county_code: County code (for logging)
-        """
-        converter = ShapefileToSQLiteConverter(
-            db_path=str(self.db_path),
-            table_name=table_name,
-            batch_size=self.batch_size,
-            append_mode=False,  # Create new temp table
-        )
-        converter.load_dbf_only(str(dbf_path))
-        logger.debug(f"Loaded {dbf_path.name} into {table_name}")
-
-    def _transform_and_load(self, county_code: str) -> None:
-        """
-        Transform temporary tables into permanent schema.
-
-        Implements the convert.sql workflow:
-        1. Create indexes on temporary tables
-        2. Generate linezip (edges with ZIP codes)
-        3. Generate features with metaphone
-        4. Link features to edges
-        5. Store edges with compressed geometry
-        6. Store address ranges
-
-        Args:
-            county_code: County code (for logging)
-        """
-        conn = sqlite3.connect(str(self.db_path))
-        cur = conn.cursor()
-
-        try:
-            # Set performance pragmas
-            cur.execute("PRAGMA temp_store=MEMORY;")
-            cur.execute("PRAGMA journal_mode=WAL;")
-            cur.execute("PRAGMA synchronous=NORMAL;")
-            cur.execute("PRAGMA cache_size=500000;")
-
-            # Create indexes on temp tables
-            logger.debug(f"Creating indexes for {county_code}")
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS featnames_tlid ON tiger_featnames (tlid);"
-            )
-            cur.execute("CREATE INDEX IF NOT EXISTS addr_tlid ON tiger_addr (tlid);")
-            cur.execute("CREATE INDEX IF NOT EXISTS edges_tlid ON tiger_edges (tlid);")
-
-            # Generate linezip table (edges matched to ZIP codes)
-            logger.debug(f"Generating linezip for {county_code}")
-            cur.execute(
-                """
-                CREATE TEMPORARY TABLE linezip AS
-                    SELECT DISTINCT tlid, zip FROM (
-                        SELECT tlid, zip FROM tiger_addr a
-                        UNION
-                        SELECT tlid, zipr AS zip FROM tiger_edges e
-                           WHERE e.mtfcc LIKE 'S%' AND zipr <> "" AND zipr IS NOT NULL
-                        UNION
-                        SELECT tlid, zipl AS zip FROM tiger_edges e
-                           WHERE e.mtfcc LIKE 'S%' AND zipl <> "" AND zipl IS NOT NULL
-                    ) AS whatever;
-                """
-            )
-            cur.execute("CREATE INDEX IF NOT EXISTS linezip_tlid ON linezip (tlid);")
-
-            # Generate features with metaphone
-            logger.debug(f"Generating features for {county_code}")
-            cur.execute(
-                """
-                CREATE TEMPORARY TABLE feature_bin (
-                  fid INTEGER PRIMARY KEY AUTOINCREMENT,
-                  street VARCHAR(100),
-                  street_phone VARCHAR(5),
-                  paflag BOOLEAN,
-                  zip CHAR(5));
-                """
-            )
-
-            # Initialize sequence for feature_bin
-            cur.execute(
-                "INSERT OR IGNORE INTO sqlite_sequence (name, seq) VALUES ('feature_bin', 0);"
-            )
-
-            # Update sequence from existing feature table max
-            cur.execute(
-                """
-                UPDATE sqlite_sequence
-                    SET seq=(SELECT COALESCE(max(fid), 0) FROM feature)
-                    WHERE name="feature_bin";
-                """
-            )
-
-            # Insert features with metaphone
-            cur.execute(
-                """
-                INSERT INTO feature_bin
-                    SELECT DISTINCT NULL, fullname, 
-                           HEX(fullname) AS street_phone,
-                           paflag, zip
-                        FROM linezip l, tiger_featnames f
-                        WHERE l.tlid=f.tlid AND name <> "" AND name IS NOT NULL;
-                """
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS feature_bin_idx ON feature_bin (street, zip);"
-            )
-
-            # Link features to edges
-            logger.debug(f"Linking features to edges for {county_code}")
-            cur.execute(
-                """
-                INSERT OR IGNORE INTO feature_edge
-                    SELECT DISTINCT fid, f.tlid
-                        FROM linezip l, tiger_featnames f, feature_bin b
-                        WHERE l.tlid=f.tlid AND l.zip=b.zip
-                          AND f.fullname=b.street AND f.paflag=b.paflag;
-                """
-            )
-
-            # Insert final features
-            cur.execute("INSERT OR IGNORE INTO feature SELECT * FROM feature_bin;")
-
-            # Insert edges (storing WKB geometry)
-            logger.debug(f"Storing edges for {county_code}")
-            cur.execute(
-                """
-                INSERT OR IGNORE INTO edge
-                    SELECT l.tlid, e.the_geom FROM
-                        (SELECT DISTINCT tlid FROM linezip) AS l, tiger_edges e
-                        WHERE l.tlid=e.tlid AND fullname <> "" AND fullname IS NOT NULL;
-                """
-            )
-
-            # Insert address ranges
-            logger.debug(f"Storing address ranges for {county_code}")
-            cur.execute(
-                """
-                INSERT INTO range
-                    SELECT tlid,
-                           CAST(SUBSTR(fromhn, -10) AS INTEGER),
-                           CAST(SUBSTR(tohn, -10) AS INTEGER),
-                           SUBSTR(fromhn, 1, LENGTH(fromhn) - 10),
-                           zip,
-                           side
-                    FROM tiger_addr
-                    WHERE fromhn REGEXP '^[0-9]+$';
-                """
-            )
-
-            # Clean up temporary tables
-            logger.debug(f"Cleaning up temporary tables for {county_code}")
-            cur.execute("DROP TABLE IF EXISTS feature_bin;")
-            cur.execute("DROP TABLE IF EXISTS linezip;")
-            cur.execute("DROP TABLE IF EXISTS tiger_addr;")
-            cur.execute("DROP TABLE IF EXISTS tiger_featnames;")
-            cur.execute("DROP TABLE IF EXISTS tiger_edges;")
-
-            conn.commit()
-            logger.info(f"Transformed and loaded data for county {county_code}")
-
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Transform failed for county {county_code}: {e}")
-            raise
-        finally:
-            cur.close()
-            conn.close()
 
     def create_indexes(self) -> None:
         """Create final indexes for queryability."""

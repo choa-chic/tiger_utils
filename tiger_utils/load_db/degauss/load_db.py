@@ -31,7 +31,7 @@ from pathlib import Path
 
 from .shp_to_sqlite import ShapefileToSQLiteConverter, convert_shapefile
 from .tiger_importer import TigerImporter, import_tiger_data
-from .db_setup import create_schema, create_indexes
+from .db_setup import create_schema, create_indexes, load_place_data
 
 __all__ = [
     "ShapefileToSQLiteConverter",
@@ -40,4 +40,5 @@ __all__ = [
     "import_tiger_data",
     "create_schema",
     "create_indexes",
+    "load_place_data",
 ]

@@ -11,6 +11,11 @@ Discover available files by scraping Census Bureau directories and populating th
    
 `python -m tiger_utils.tiger_cli --discover-only`
 
+Specific shape types
+```sh
+python -m tiger_utils.tiger_cli --discover-only --shape-types place --year 2021
+```
+
 ### Sync database state with files on disk
 Synchronize state database with files on disk (mark completed if file exists):
 
@@ -24,3 +29,7 @@ Download all data for 2025 (default 50 states):
 Download data for specific states (e.g., California and Texas):
 
 `python -m tiger_utils.tiger_cli --year 2025 --states 06 48`
+
+Download discovered, but not available on disk files:
+
+`python -m tiger_utils.tiger_cli --year 2021 --download`

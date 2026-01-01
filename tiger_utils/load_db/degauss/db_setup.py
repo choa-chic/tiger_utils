@@ -122,6 +122,65 @@ def create_schema(db_path: Optional[str] = None) -> None:
     logger.info(f"Created schema in {db_path}")
 
 
+def load_place_data(db_path: Optional[str] = None) -> None:
+    """
+    Load place (gazetteer) data from place.sql if not already present.
+
+    Checks if place table has data; if empty, loads from sql/place.sql.
+    This is idempotent—safe to call multiple times.
+
+    Args:
+        db_path: Path to SQLite database. If None, uses default location.
+    """
+    if db_path is None:
+        # Default: project_root / database / geocoder.db
+        project_root = Path(__file__).resolve().parents[3]
+        db_path = project_root / "database" / "geocoder.db"
+
+    db_path = Path(db_path)
+    sql_dir = Path(__file__).resolve().parent / "sql"
+    place_sql = sql_dir / "place.sql"
+
+    if not place_sql.exists():
+        logger.warning(f"place.sql not found at {place_sql}")
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+
+    try:
+        # Check if place table already has data
+        cur.execute("SELECT COUNT(*) FROM place;")
+        count = cur.fetchone()[0]
+
+        if count > 0:
+            logger.info(f"place table already populated with {count} rows; skipping load")
+            return
+
+        logger.info(f"Loading place data from {place_sql}")
+
+        # Read and execute place.sql
+        with open(place_sql, "r", encoding="utf-8") as f:
+            sql_text = f.read()
+
+        # Execute the SQL script
+        conn.executescript(sql_text)
+        conn.commit()
+
+        # Verify load
+        cur.execute("SELECT COUNT(*) FROM place;")
+        count = cur.fetchone()[0]
+        logger.info(f"Successfully loaded {count} place records")
+
+    except sqlite3.OperationalError as e:
+        logger.error(f"Failed to load place data: {e}")
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
 def create_indexes(db_path: Optional[str] = None) -> None:
     """
     Create indexes for TIGER/Line tables.

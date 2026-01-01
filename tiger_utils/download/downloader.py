@@ -4,7 +4,7 @@ downloader.py - Download logic and parallelization for TIGER/Line downloads
 
 from pathlib import Path
 import os
-from typing import List
+from typing import List, Iterable
 import time
 import httpx
 import asyncio
@@ -82,9 +82,9 @@ async def download_county_data(state_fips: str, year: int, output_dir: Path,
     counties = get_county_list(state_fips, year, dataset_types[0] if dataset_types else 'EDGES')
     logger.info(f"Found {len(counties)} counties for state {state_fips}")
     download_tasks = []
+    # Only honor discovered URLs when explicitly requested; otherwise download everything
     discovered_urls = None
-    if state is not None:
-        # Try to get discovered URLs for this state
+    if discover_files and state is not None:
         if hasattr(state, 'data'):
             discovered_urls = set(state.data.get('discovered_urls', {}).get(state_fips, []))
         elif hasattr(state, 'get_pending_urls'):
@@ -96,7 +96,7 @@ async def download_county_data(state_fips: str, year: int, output_dir: Path,
         logger.info(f"Preparing download tasks for dataset type: {dataset_type}")
         for county_fips in counties:
             url = construct_url(year, state_fips, county_fips, dataset_type)
-            if discovered_urls is not None and url not in discovered_urls:
+            if discover_files and discovered_urls is not None and url not in discovered_urls:
                 logger.debug(f"Skipping non-discovered URL: {url}")
                 continue
             filename = os.path.basename(url)
@@ -133,4 +133,48 @@ async def download_county_data(state_fips: str, year: int, output_dir: Path,
                 else:
                     failed += 1
     logger.info(f"Download summary for {state_fips}: Successful: {successful}, Failed: {failed}, Not found: {not_found}")
+    return successful, failed, not_found
+
+
+async def download_discovered_urls(state_fips: str, urls: Iterable[str], output_dir: Path,
+                                   parallel: int = 8, timeout: int = 60, state=None):
+    """
+    Download the provided URLs for a state; intended for previously discovered-but-missing files.
+    """
+    urls = list(dict.fromkeys(urls))  # de-duplicate while preserving order
+    logger.info(f"Starting discovered downloads for state {state_fips}; {len(urls)} pending")
+    download_tasks = []
+    for url in urls:
+        filename = os.path.basename(url)
+        output_path = output_dir / state_fips / filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        download_tasks.append((url, output_path))
+    sem = asyncio.Semaphore(parallel)
+
+    async def sem_download_file(*args, **kwargs):
+        async with sem:
+            return await download_file(*args, **kwargs)
+
+    tasks = [sem_download_file(url, output_path, 8, timeout, state, state_fips) for url, output_path in download_tasks]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    successful = 0
+    failed = 0
+    not_found = 0
+    for i, result in enumerate(results):
+        url, output_path = download_tasks[i]
+        if isinstance(result, Exception):
+            logger.error(f"Error downloading {url}: {result}")
+            failed += 1
+        else:
+            success, _, msg = result
+            if success:
+                logger.info(f"Download succeeded: {url}")
+                successful += 1
+            else:
+                logger.info(f"Download failed: {url} ({msg})")
+                if 'not found' in msg.lower() or '404' in msg:
+                    not_found += 1
+                else:
+                    failed += 1
+    logger.info(f"Discovered download summary for {state_fips}: Successful: {successful}, Failed: {failed}, Not found: {not_found}")
     return successful, failed, not_found

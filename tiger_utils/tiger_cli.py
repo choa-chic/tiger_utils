@@ -9,7 +9,7 @@ import argparse
 from pathlib import Path
 import time
 import asyncio
-from tiger_utils.download.downloader import download_county_data
+from tiger_utils.download.downloader import download_county_data, download_discovered_urls
 from tiger_utils.download.progress_manager import DownloadState, DownloadStateDB
 from tiger_utils.download.discover import discover_state_files, discover_state_files_multi
 from tiger_utils.download.url_patterns import (
@@ -61,6 +61,7 @@ Examples:
 
     # download operations
     parser.add_argument('--discover-only', action='store_true', help='Only discover and populate URLs in state database, do not download files')
+    parser.add_argument('--download', action='store_true', help='Download all discovered files that are not yet on disk')
     parser.add_argument('--sync-state', action='store_true', help='Synchronize state database with files on disk (mark completed if file exists)')
     parser.add_argument('--show-status', action='store_true', help='Show download status for all states/territories and exit')
     
@@ -195,7 +196,8 @@ Examples:
             total_discovered += len(all_urls)
             logger.info(f"Discovered {len(all_urls)} files for {state_fips}")
         logger.info(f"Total URLs Discovered: {total_discovered}")
-        return 0
+        if not args.download:
+            return 0
 
     # Download data for each state
     async def run_all_downloads():
@@ -213,6 +215,33 @@ Examples:
         logger.info(f"Total Not Found:  {total_not_found}")
         logger.info(f"Total Failed:     {total_failed}")
         return 0 if total_failed == 0 else 1
+
+    async def run_discovered_downloads():
+        total_successful = 0
+        total_failed = 0
+        total_not_found = 0
+        for state_fips in state_list:
+            try:
+                pending_urls = download_state.get_pending_urls(state_fips)
+            except Exception as e:
+                logger.error(f"Failed to fetch pending URLs for {state_fips}: {e}")
+                continue
+            if not pending_urls:
+                logger.info(f"No pending discovered files for {state_fips}")
+                continue
+            successful, failed, not_found = await download_discovered_urls(
+                state_fips, pending_urls, output_dir, args.parallel, args.timeout, download_state
+            )
+            total_successful += successful
+            total_failed += failed
+            total_not_found += not_found
+        logger.info(f"Total Successful: {total_successful}")
+        logger.info(f"Total Not Found:  {total_not_found}")
+        logger.info(f"Total Failed:     {total_failed}")
+        return 0 if total_failed == 0 else 1
+
+    if args.download:
+        return asyncio.run(run_discovered_downloads())
 
     return asyncio.run(run_all_downloads())
 

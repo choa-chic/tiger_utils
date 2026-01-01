@@ -13,6 +13,8 @@ venv/
 *.csv
 *.sqlite
 *.db
+*.db-shm
+*.db-wal
 *-journal
 *.zip
 *.tar.gz
