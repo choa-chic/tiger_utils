@@ -23,6 +23,75 @@ def get_default_db_path() -> Path:
     return Path(__file__).resolve().parents[3] / "database" / "geocoder.db"
 
 
+def confirm_defaults(
+    db_path: Path,
+    source_dir: Path,
+    using_default_db: bool,
+    using_default_source: bool,
+) -> bool:
+    """
+    Ask user to confirm when defaults are being used.
+
+    Args:
+        db_path: Database path
+        source_dir: Source directory path
+        using_default_db: Whether database path is default
+        using_default_source: Whether source directory is default
+
+    Returns:
+        True to proceed, False to cancel
+    """
+    defaults_used = []
+    if using_default_db:
+        defaults_used.append(f"Database: {db_path}")
+    if using_default_source:
+        defaults_used.append(f"Source: {source_dir}")
+
+    if not defaults_used:
+        return True  # All explicit, no confirmation needed
+
+    print("\n⚠️  Using default paths:")
+    for item in defaults_used:
+        print(f"  • {item}")
+
+    response = input("\nProceed? [Y/n]: ").strip().lower()
+    return response != "n"
+
+
+def confirm_database_action(db_path: Path) -> str:
+    """
+    Ask user what to do if database already exists.
+
+    Args:
+        db_path: Path to database file
+
+    Returns:
+        'append' to add to existing data, 'recreate' to start fresh, 'cancel' to abort
+    """
+    if not db_path.exists():
+        return "append"  # Database doesn't exist, proceed normally
+
+    print(f"\n⚠️  Database already exists: {db_path}")
+    print("Choose an action:")
+    print("  [A] Append - Add to existing data (default)")
+    print("  [R] Recreate - Delete and start fresh")
+    print("  [C] Cancel - Abort import")
+
+    while True:
+        response = input("\nAction [A/r/c]: ").strip().lower()
+        if response == "" or response == "a":
+            return "append"
+        elif response == "r":
+            confirm = input("⚠️  This will DELETE all existing data. Confirm? [y/N]: ").strip().lower()
+            if confirm == "y":
+                return "recreate"
+            print("Recreate cancelled, choose another action.")
+        elif response == "c":
+            return "cancel"
+        else:
+            print("Invalid choice. Please enter A, R, or C.")
+
+
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging."""
     level = logging.DEBUG if verbose else logging.INFO
@@ -122,6 +191,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     default_source_path = project_root / "tiger_data"
     args = parser.parse_args(argv)
 
+    # Track which defaults are being used
+    using_default_db = args.database is None
+    using_default_source = args.source is None
+
     # Fill defaults when omitted
     if args.source is None:
         args.source = str(default_source_path)
@@ -155,6 +228,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not source_dir.exists():
             logger.error(f"Source directory not found: {source_dir}")
             return 1
+
+        # Confirm defaults if being used
+        if not confirm_defaults(db_path, source_dir, using_default_db, using_default_source):
+            logger.info("Import cancelled by user")
+            return 0
+
+        # Check if database exists and ask what to do
+        db_action = confirm_database_action(db_path)
+        if db_action == "cancel":
+            logger.info("Import cancelled by user")
+            return 0
+        elif db_action == "recreate":
+            logger.info(f"Deleting existing database: {db_path}")
+            if db_path.exists():
+                db_path.unlink()
+            # Also delete any WAL files
+            wal_file = db_path.with_suffix(db_path.suffix + "-wal")
+            shm_file = db_path.with_suffix(db_path.suffix + "-shm")
+            if wal_file.exists():
+                wal_file.unlink()
+            if shm_file.exists():
+                shm_file.unlink()
+            logger.info("Database deleted, will create fresh")
 
         logger.info(f"Import target: {db_path}")
         logger.info(f"Source directory: {source_dir}")

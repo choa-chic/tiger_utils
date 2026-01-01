@@ -117,9 +117,7 @@ class TigerETL:
             for record in src:
                 edge = {
                     "tlid": int(record["properties"].get("TLID", 0)),
-                    "the_geom": shape(record["geometry"]).wkb,
-                    "statefp": record["properties"].get("STATEFP", "").upper(),
-                    "countyfp": record["properties"].get("COUNTYFP", "").upper(),
+                    "geometry": shape(record["geometry"]).wkb,
                     "mtfcc": record["properties"].get("MTFCC", "").upper(),
                     "zipl": (record["properties"].get("ZIPL") or "").upper(),
                     "zipr": (record["properties"].get("ZIPR") or "").upper(),
@@ -340,11 +338,11 @@ class TigerETL:
                 batch = edges[i : i + self.batch_size]
                 cur.executemany(
                     """
-                    INSERT INTO edge (the_geom, statefp, countyfp, mtfcc, tlid)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO edge (tlid, geometry)
+                    VALUES (?, ?)
                     """,
                     [
-                        (e["the_geom"], e["statefp"], e["countyfp"], e["mtfcc"], e["tlid"])
+                        (e["tlid"], e["geometry"])
                         for e in batch
                     ],
                 )

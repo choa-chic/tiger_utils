@@ -284,7 +284,9 @@ class TigerImporter:
                     pass  # Directory not empty, skip
 
         # Handle unzipped files (create symlinks if not already extracted)
-        for file_type in list(self.SHAPEFILE_TYPES) + list(self.DBF_TYPES):
+        # Look for standard TIGER file types: edges, featnames, addr
+        file_types = ["edges", "featnames", "addr"]
+        for file_type in file_types:
             shp_pattern = f"*_{county_code}_{file_type}.*"
             found = False
 

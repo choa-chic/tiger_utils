@@ -15,14 +15,19 @@ uv pip install -r requirements.txt
 python -m tiger_utils.load_db.degauss.importer_cli --init-db
 ```
 
-## Import TIGER/Line shapefiles, optionally by year and/or state FIPS
+## Import TIGER/Line shapefiles (using defaults or custom paths)
 ```sh
-python -m tiger_utils.load_db.degauss.importer_cli /data/tiger --state 13 --year 2025
-```
+# Using project defaults (database/geocoder.db + tiger_data/)
+python -m tiger_utils.load_db.degauss.importer_cli --state 13 --year 2025
 
-## Import all available TIGER/Line shapefiles in a directory for a given year
-```sh
+# Specify custom database and source directory
+python -m tiger_utils.load_db.degauss.importer_cli /path/to/geocoder.db /path/to/tiger_files --state 13 --year 2025
+
+# Import all available TIGER files in current year
 python -m tiger_utils.load_db.degauss.importer_cli --year 2025
+
+# Import specific counties
+python -m tiger_utils.load_db.degauss.importer_cli 06001 06007 06019
 ```
 
 ## Overview
@@ -66,18 +71,43 @@ pip install -r requirements.txt
 
 ### Command-Line Interface
 
+**Syntax**: `python -m tiger_utils.load_db.degauss.importer_cli [DB_PATH] [SOURCE_DIR] [counties...] [options]`
+
+Arguments are optional and use defaults if omitted:
+- **DB_PATH**: Path to SQLite database (default: `project_root/database/geocoder.db`)
+- **SOURCE_DIR**: Directory with TIGER/Line files (default: `project_root/tiger_data`)
+- **counties**: Specific county FIPS codes to import (default: auto-detect)
+
+**Filtering options**:
+- `--year YYYY`: Filter to specific TIGER vintage (e.g., 2025)
+- `--state SS`: Filter to specific state FIPS code (e.g., 06 for California)
+- `--counties C1,C2,...`: Comma-separated list of county FIPS codes
+- `-v, --verbose`: Enable debug logging
+- `--init-db`: Initialize schema only, skip import
+- `--batch-size N`: Records per batch insert (default: 1000)
+- `--no-recursive`: Don't search subdirectories
+- `--temp-dir PATH`: Temporary directory for extraction
+
+**Examples**:
+
 ```bash
-# Import all counties in a directory (auto-detect from filenames)
+# Use defaults (database/geocoder.db + tiger_data/), filter by state and year
+python -m tiger_utils.load_db.degauss.importer_cli --state 06 --year 2025
+
+# Specify custom paths
 python -m tiger_utils.load_db.degauss.importer_cli /data/geocoder.db /data/tiger_files/
+
+# Custom paths with filtering
+python -m tiger_utils.load_db.degauss.importer_cli /data/geocoder.db /data/tiger_files/ --state 13 --year 2025
 
 # Import specific counties
 python -m tiger_utils.load_db.degauss.importer_cli /data/geocoder.db /data/tiger_files/ 06001 06007 06019
 
-# Enable verbose logging
-python -m tiger_utils.load_db.degauss.importer_cli /data/geocoder.db /data/tiger_files/ -v
+# Verbose output
+python -m tiger_utils.load_db.degauss.importer_cli --state 06 --year 2025 -v
 
-# Specify temporary directory
-python -m tiger_utils.load_db.degauss.importer_cli /data/geocoder.db /data/tiger_files/ --temp-dir /tmp/tiger
+# Initialize database schema only
+python -m tiger_utils.load_db.degauss.importer_cli --init-db
 ```
 
 ### Python API
