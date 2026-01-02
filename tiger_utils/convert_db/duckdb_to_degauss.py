@@ -32,22 +32,6 @@ def create_degauss_schema(conn: duckdb.DuckDBPyConnection):
     """
     logger.info("Creating DeGAUSS schema...")
     
-    # Place table - Gazetteer of place names (cities, states, ZIPs, coordinates)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS place (
-            zip VARCHAR(5) PRIMARY KEY,
-            city VARCHAR(100),
-            state VARCHAR(2),
-            city_phone VARCHAR(5),
-            lat DOUBLE,
-            lon DOUBLE,
-            fips_county VARCHAR(5),
-            fips_class VARCHAR(2),
-            fips_place VARCHAR(7),
-            priority INTEGER
-        );
-    """)
-    
     # Edge table - Line geometries with TLID (TIGER Line ID)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS edge (
@@ -117,6 +101,48 @@ def compute_metaphone(text: Optional[str], max_length: int = 5) -> Optional[str]
         return cleaned[:max_length]
 
 
+def load_place_data(conn: duckdb.DuckDBPyConnection, target_db: str):
+    """
+    Load place data from place.sql into DuckDB.
+    
+    Args:
+        conn: DuckDB connection to degauss database
+        target_db: Path to target database (to find place.sql)
+    """
+    sql_file = Path(__file__).resolve().parent.parent / "load_db" / "degauss" / "sql" / "place.sql"
+    
+    if not sql_file.exists():
+        logger.warning(f"place.sql not found at {sql_file}")
+        return
+    
+    logger.info(f"Loading place data from {sql_file}")
+    
+    try:
+        # Read and execute place.sql
+        with open(sql_file, "r", encoding="utf-8") as f:
+            sql_text = f.read()
+        
+        # Remove SQLite-specific PRAGMA statements that DuckDB doesn't understand
+        lines = []
+        for line in sql_text.split('\n'):
+            # Skip SQLite PRAGMA statements
+            if line.strip().startswith('PRAGMA') or line.strip().startswith('PRAGMA'):
+                continue
+            lines.append(line)
+        sql_text = '\n'.join(lines)
+        
+        # Execute the SQL script
+        conn.execute(sql_text)
+        
+        # Verify load
+        count = conn.execute("SELECT COUNT(*) FROM place").fetchone()[0]
+        logger.info(f"Successfully loaded {count} place records")
+        
+    except Exception as e:
+        logger.error(f"Failed to load place data: {e}")
+        raise
+
+
 def convert_to_degauss(
     source_db: str,
     target_db: str,
@@ -160,6 +186,10 @@ def convert_to_degauss(
     
     # Create schema in target database
     create_degauss_schema(target_conn)
+    
+    # Load place data from SQL file
+    logger.info("Loading place data...")
+    load_place_data(target_conn, target_db)
     
     # Register metaphone function with NULL handling
     target_conn.create_function(
@@ -304,56 +334,7 @@ def convert_to_degauss(
         range_count = target_conn.execute("SELECT COUNT(*) FROM range").fetchone()[0]
         logger.info(f"Inserted {range_count:,} records into range table")
         
-        # Step 5: Populate place table (if it exists in source)
-        logger.info("Checking for place table in source database...")
-        
-        # Check if place table exists in source using system catalog
-        try:
-            place_test = target_conn.execute("""
-                SELECT COUNT(*) FROM source_db.main.place LIMIT 1
-            """).fetchone()
-            place_exists = True
-        except Exception:
-            place_exists = False
-        
-        if place_exists:
-            logger.info("Populating place table...")
-            
-            zip_filter = ""
-            if state_fips:
-                # Filter by state FIPS if provided
-                zip_filter = f"""
-                WHERE zip IN (
-                    SELECT DISTINCT zip FROM range
-                    UNION
-                    SELECT DISTINCT zip FROM feature
-                )
-                """
-            
-            target_conn.execute(f"""
-                INSERT INTO place (zip, city, state, city_phone, lat, lon, fips_county, fips_class, fips_place, priority)
-                SELECT DISTINCT
-                    zip,
-                    city,
-                    state,
-                    compute_metaphone(city, 5) as city_phone,
-                    lat,
-                    lon,
-                    fips_county,
-                    fips_class,
-                    fips_place,
-                    priority
-                FROM source_db.main.place
-                {zip_filter}
-            """)
-            
-            place_count = target_conn.execute("SELECT COUNT(*) FROM place").fetchone()[0]
-            logger.info(f"Inserted {place_count:,} records into place table")
-        else:
-            logger.warning("No place table found in source database - skipping")
-            place_count = 0
-        
-        # Step 6: Create indexes for performance
+        # Step 5: Create indexes for performance
         logger.info("Creating indexes...")
         
         indexes = [
@@ -375,7 +356,8 @@ def convert_to_degauss(
         logger.info("Creating spatial index on edge.geometry")
         target_conn.execute("CREATE INDEX idx_edge_geom ON edge USING RTREE (geometry);")
         
-        # Place table indexes (if table was populated)
+        # Place table indexes (place table is populated from place.sql)
+        place_count = target_conn.execute("SELECT COUNT(*) FROM place").fetchone()[0]
         if place_count > 0:
             logger.info("Creating place table indexes...")
             target_conn.execute("CREATE INDEX idx_place_city_phone_state ON place(city_phone, state);")
@@ -398,7 +380,32 @@ def convert_to_degauss(
         import os
         if os.path.exists(target_db):
             size_mb = os.path.getsize(target_db) / (1024 * 1024)
-            logger.info(f"Database size:        {size_mb:.2f} MB")
+            logger.info(f"Database size (before optimization): {size_mb:.2f} MB")
+        
+        # Optimize the database
+        logger.info("=" * 70)
+        logger.info("Optimizing database...")
+        logger.info("=" * 70)
+        
+        # Vacuum to reclaim space
+        logger.info("Running VACUUM...")
+        target_conn.execute("VACUUM;")
+        logger.info("VACUUM complete")
+        
+        # Analyze for query optimization
+        logger.info("Running ANALYZE...")
+        target_conn.execute("ANALYZE;")
+        logger.info("ANALYZE complete")
+        
+        # Compress the database (DuckDB-specific)
+        logger.info("Compressing database...")
+        target_conn.execute("PRAGMA compression_format='snappy';")
+        logger.info("Compression enabled (snappy)")
+        
+        # Final database size after optimization
+        if os.path.exists(target_db):
+            size_mb = os.path.getsize(target_db) / (1024 * 1024)
+            logger.info(f"Database size (after optimization):  {size_mb:.2f} MB")
         
         logger.info("=" * 70)
         
@@ -413,18 +420,23 @@ def main():
     """Command-line interface for database conversion."""
     import argparse
     
+    # Get project root (tiger_utils/)
+    project_root = Path(__file__).resolve().parents[2]
+    default_source = str(project_root / "database" / "geocoder.duckdb")
+    default_target = str(project_root / "database" / "degauss.duckdb")
+    
     parser = argparse.ArgumentParser(
         description="Convert TIGER/Line DuckDB database to DeGAUSS format"
     )
     parser.add_argument(
         "--source",
-        required=True,
-        help="Source database file (geocoder.duckdb)"
+        default=default_source,
+        help=f"Source database file (default: {default_source})"
     )
     parser.add_argument(
         "--target",
-        required=True,
-        help="Target database file (degauss.duckdb)"
+        default=default_target,
+        help=f"Target database file (default: {default_target})"
     )
     parser.add_argument(
         "--state",

@@ -27,6 +27,7 @@ from .load_db import (
     import_tiger_data,
     create_schema,
     create_indexes,
+    load_place_data,
 )
 
 __all__ = [
@@ -36,6 +37,7 @@ __all__ = [
     "import_tiger_data",
     "create_schema",
     "create_indexes",
+    "load_place_data",
 ]
 
 from . import db_setup
