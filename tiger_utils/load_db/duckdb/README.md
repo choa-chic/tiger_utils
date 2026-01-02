@@ -4,6 +4,10 @@
 ### Import downloaded shapefiles into DuckDB database:
 `python -m tiger_utils.load_db.duckdb.importer`
 
+```
+
+```
+
 `python -m tiger_utils.load_db.duckdb.importer all --year 2021 --state 13`
 
 `python -m tiger_utils.load_db.duckdb.importer all ./tiger_data/2025 --db geocoder.duckdb --state 13`

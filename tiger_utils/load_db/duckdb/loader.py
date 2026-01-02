@@ -41,6 +41,7 @@ def load_shp_to_duckdb(
 ) -> None:
     """
     Load a single SHP file into DuckDB with automatic schema inference.
+    Supports both regular files and /vsizip/ paths for direct ZIP reading.
     """
     conn = get_connection(db_path) if use_connection_pool else get_optimized_connection(db_path)
     
@@ -55,12 +56,50 @@ def load_shp_to_duckdb(
         # Create table if not exists
         conn.execute(f"CREATE TABLE IF NOT EXISTS {table_name} AS SELECT * FROM st_read('{shp_path}') LIMIT 0;")
         
-        # Insert data
+        # Insert data (st_read handles /vsizip/ paths automatically)
         conn.execute(f"INSERT INTO {table_name} SELECT * FROM st_read('{shp_path}');")
         
     finally:
         if not use_connection_pool:
             conn.close()
+
+def load_from_zip(
+    zip_path: str,
+    db_path: str,
+    file_type: str = 'shp',
+    use_connection_pool: bool = True,
+) -> None:
+    """
+    Load SHP or DBF file directly from ZIP without extraction.
+    Uses DuckDB's /vsizip/ virtual file system.
+    
+    Args:
+        zip_path: Path to ZIP file
+        db_path: DuckDB database path
+        file_type: 'shp' or 'dbf' to determine which file to load
+        use_connection_pool: Use thread-local connection pool
+    """
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        # Find the target file
+        target_ext = f".{file_type}"
+        target_file = None
+        for name in zf.namelist():
+            if name.lower().endswith(target_ext):
+                target_file = name
+                break
+        
+        if not target_file:
+            raise FileNotFoundError(f"No {file_type} file found in {zip_path}")
+        
+        # Construct /vsizip/ path
+        vsi_path = f"/vsizip/{zip_path}/{target_file}"
+        
+        if file_type == 'shp':
+            load_shp_to_duckdb(vsi_path, schema=None, db_path=db_path, use_connection_pool=use_connection_pool)
+        elif file_type == 'dbf':
+            load_dbf_to_duckdb(vsi_path, db_path, use_connection_pool=use_connection_pool)
+        else:
+            raise ValueError(f"Unsupported file_type: {file_type}")
 
 def load_dbf_to_duckdb(dbf_path: str, db_path: str, table_name: str = None, 
                        use_connection_pool: bool = True) -> None:

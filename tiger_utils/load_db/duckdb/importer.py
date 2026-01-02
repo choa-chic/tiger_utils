@@ -1,7 +1,51 @@
 """
 importer.py
 CLI for importing Census ZIP/SHP files into DuckDB using the modular loader.
-With performance optimizations: parallel processing, async I/O, progress bars.
+With performance optimizations: parallel processing, direct ZIP reading, progress bars.
+
+USAGE:
+    Basic import (defaults: year=2025, all states, direct from ZIP):
+        python -m tiger_utils.load_db.duckdb.importer
+    
+    Import specific year and state:
+        python -m tiger_utils.load_db.duckdb.importer --year 2021 --state 06
+    
+    Import specific shape types only:
+        python -m tiger_utils.load_db.duckdb.importer --year 2025 --shape-type edges
+    
+    Custom paths:
+        python -m tiger_utils.load_db.duckdb.importer --db /path/to/db.duckdb \
+            --input-dir /path/to/tiger_data --output-dir /path/to/temp
+    
+    Pre-generate schema cache (for faster subsequent imports):
+        python -m tiger_utils.load_db.duckdb.importer --generate-schemas \
+            --year 2021 --state 06
+    
+    Force schema re-inference (ignore cache):
+        python -m tiger_utils.load_db.duckdb.importer --no-cache --year 2021
+    
+    Control parallel processing:
+        python -m tiger_utils.load_db.duckdb.importer --workers 4 --year 2021
+    
+    Skip automatic consolidation:
+        python -m tiger_utils.load_db.duckdb.importer --skip-consolidation
+    
+    Extract files first (slower, uses more disk):
+        python -m tiger_utils.load_db.duckdb.importer --no-direct-zip --year 2021
+
+FEATURES:
+    - **Direct ZIP import** - No extraction needed! Reads directly from ZIP files
+    - Automatic schema inference from actual SHP/DBF files (no hardcoded schemas)
+    - Schema caching for improved performance on repeated imports
+    - Parallel processing with configurable worker count
+    - Progress bars (requires tqdm package)
+    - TIGER/Line filename validation
+    - Handles both county-level and state-level files
+
+DEFAULT PATHS:
+    Database:   <project_root>/database/geocoder.duckdb
+    Input:      <project_root>/tiger_data/{year}
+    Temp:       <project_root>/_tiger_tmp (only used if --no-direct-zip)
 """
 import argparse
 import os
@@ -10,9 +54,11 @@ import multiprocessing
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import List, Tuple
-from .loader import load_shp_to_duckdb, load_dbf_to_duckdb, load_shp_from_zip_directly
+from .loader import load_shp_to_duckdb, load_dbf_to_duckdb, load_shp_from_zip_directly, load_from_zip
 from .schema_cache import (
-    batch_infer_schemas, 
+    batch_infer_schemas,
+    batch_infer_schemas_from_zips,
+    get_file_pattern,
     save_cache_to_file, 
     load_cache_from_file,
     clear_cache,
@@ -105,6 +151,19 @@ def import_file_wrapper(args: Tuple[Path, str, str]) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"{file_path.name}: {e}"
 
+def import_zip_wrapper(args: Tuple[Path, str, str]) -> Tuple[bool, str]:
+    """
+    Wrapper function for parallel ZIP import (no extraction needed!).
+    Determines file type from ZIP name and loads directly.
+    """
+    zip_path, db_path, file_type = args
+    try:
+        # Load directly from ZIP using /vsizip/
+        load_from_zip(str(zip_path), db_path, file_type=file_type, use_connection_pool=True)
+        return True, str(zip_path.name)
+    except Exception as e:
+        return False, f"{zip_path.name}: {e}"
+
 def import_census_to_duckdb(
     input_dir: str,
     output_dir: str,
@@ -155,6 +214,89 @@ def import_census_to_duckdb(
         raise FileNotFoundError(f"Input directory does not exist: {input_path}")
     output_path.mkdir(parents=True, exist_ok=True)
     
+    # Pre-infer schemas from ZIP files before extraction (FAST - no extraction needed!)
+    logger.info("Pre-inferring schemas from ZIP files (no extraction required)...")
+    zip_files = list(input_path.rglob("*.zip"))
+    if zip_files:
+        # Filter ZIPs by state/year if specified
+        filtered_zips = []
+        for zf in zip_files:
+            if is_valid_tiger_filename(zf.name, year=year, state=state):
+                filtered_zips.append(zf)
+        
+        if filtered_zips:
+            logger.info(f"Found {len(filtered_zips)} ZIP files, inferring unique schemas...")
+            zip_results = batch_infer_schemas_from_zips(filtered_zips[:20], max_workers=4)  # Sample first 20
+            logger.info(f"Pre-inferred {len(zip_results)} unique patterns from ZIPs")
+            # Save cache now so import phase can use it
+            save_cache_to_file(str(cache_path))
+    
+    # Choose import method: direct from ZIP or extract first
+    if use_direct_zip and zip_files:
+        logger.info("Using direct ZIP import (no extraction needed!)")
+        
+        # Organize ZIPs by file type (edges/addr/featnames)
+        zip_tasks = []
+        for zf in filtered_zips:
+            pattern = get_file_pattern(zf.name)
+            if pattern:
+                # Determine if it's a shapefile or DBF-only
+                if pattern in ['edges']:  # Shapefiles
+                    zip_tasks.append((zf, db_path, 'shp'))
+                elif pattern in ['addr', 'featnames']:  # DBF files
+                    zip_tasks.append((zf, db_path, 'dbf'))
+        
+        if not zip_tasks:
+            logger.warning("No files to import")
+            return
+        
+        logger.info(f"Importing {len(zip_tasks)} ZIP files in parallel (workers: {max_workers})...")
+        
+        success_count = 0
+        fail_count = 0
+        cancelled = False
+        
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                if HAS_TQDM:
+                    futures = {executor.submit(import_zip_wrapper, args): args for args in zip_tasks}
+                    with tqdm(total=len(zip_tasks), desc="Importing from ZIPs", unit="file") as pbar:
+                        try:
+                            for future in as_completed(futures):
+                                success, msg = future.result()
+                                if success:
+                                    success_count += 1
+                                    pbar.set_postfix_str(f"✓ {msg}")
+                                else:
+                                    fail_count += 1
+                                    logger.error(f"✗ {msg}")
+                                pbar.update(1)
+                        except KeyboardInterrupt:
+                            cancelled = True
+                            pbar.write("\n⚠️  Keyboard interrupt received. Stopping import...")
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            raise
+                else:
+                    futures = [executor.submit(import_zip_wrapper, args) for args in zip_tasks]
+                    for i, future in enumerate(as_completed(futures), 1):
+                        success, msg = future.result()
+                        if success:
+                            success_count += 1
+                            logger.info(f"[{i}/{len(zip_tasks)}] ✓ {msg}")
+                        else:
+                            fail_count += 1
+                            logger.error(f"[{i}/{len(zip_tasks)}] ✗ {msg}")
+        except KeyboardInterrupt:
+            cancelled = True
+            logger.warning("\n⚠️  Import cancelled by user (Ctrl+C)")
+            logger.info(f"Partial import stats: {success_count} succeeded, {fail_count} failed before cancellation")
+            return
+        
+        if not cancelled:
+            logger.info(f"Census import complete: {success_count} succeeded, {fail_count} failed")
+        return
+    
+    # Fallback: Extract files first, then import
     # Unzip all relevant files (unless using direct ZIP reading)
     if not use_direct_zip:
         logger.info("Extracting ZIP files...")
@@ -279,34 +421,26 @@ def generate_schemas(
         raise FileNotFoundError(f"Input directory does not exist: {input_path}")
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Extract a sample of files (not all - just enough to get unique patterns)
-    logger.info("Extracting sample files...")
-    unzip_all(str(input_path), str(output_path), recursive=recursive, state=state, shape_type=shape_type)
+    # NEW: Infer directly from ZIP files (much faster - no extraction!)
+    logger.info("Finding ZIP files...")
+    zip_files = list(input_path.rglob("*.zip"))
     
-    # Async file discovery
-    logger.info("Discovering sample files...")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    shp_files = loop.run_until_complete(find_files_async(output_path, "*.shp", state, year))
-    dbf_files = loop.run_until_complete(find_files_async(output_path, "*.dbf", state, year))
-    loop.close()
+    # Filter by state/year if specified
+    filtered_zips = []
+    for zf in zip_files:
+        if is_valid_tiger_filename(zf.name, year=year, state=state):
+            filtered_zips.append(zf)
     
-    # Exclude .dbf files that have a .shp with the same stem
-    shp_stems = {shp_path.stem for shp_path in shp_files}
-    dbf_files_unique = [dbf for dbf in dbf_files if dbf.stem not in shp_stems]
-    
-    all_files = list(shp_files) + list(dbf_files_unique)
-    
-    if not all_files:
-        logger.warning("No files found to generate schemas from")
+    if not filtered_zips:
+        logger.warning("No matching ZIP files found")
         return
     
-    logger.info(f"Found {len(all_files)} files ({len(shp_files)} SHP, {len(dbf_files_unique)} DBF)")
+    logger.info(f"Found {len(filtered_zips)} ZIP files matching filters")
     
-    # Infer all unique schemas in parallel (force re-inference)
+    # Infer all unique schemas in parallel directly from ZIPs (force re-inference)
     clear_cache()  # Start fresh
-    logger.info(f"Inferring schemas from all unique patterns (workers: {max_workers})...")
-    results = batch_infer_schemas(all_files, max_workers=max_workers, use_cache=False)
+    logger.info(f"Inferring schemas directly from ZIPs (workers: {max_workers})...")
+    results = batch_infer_schemas_from_zips(filtered_zips, max_workers=max_workers)
     
     # Save cache
     cache_path = Path(db_path).parent / "schema_cache.json"
@@ -320,6 +454,7 @@ def generate_schemas(
     logger.info(f"Cache saved to:   {cache_path}")
     logger.info(f"Patterns cached:  {', '.join(sorted(results.keys()))}")
     logger.info("="*70)
+    logger.info("✓ No extraction was needed - schemas inferred directly from ZIPs!")
     logger.info("You can now run import with these cached schemas:")
     logger.info(f"  python -m tiger_utils.load_db.duckdb.importer --year {year} --state {state or 'ALL'}")
 
@@ -375,7 +510,7 @@ def main():
         action="store_false",
         dest="direct_zip",
         default=True,
-        help="Disable direct ZIP reading (extracts files to disk instead)",
+        help="Disable direct ZIP reading (extracts files to disk instead). By default, imports directly from ZIPs without extraction.",
     )
     parser.add_argument(
         "--skip-consolidation",
@@ -398,7 +533,15 @@ def main():
 
     # Determine project root (three levels up from this file)
     project_root = Path(__file__).resolve().parent.parent.parent.parent
-    input_dir = args.input_dir or str(project_root / "tiger_data")
+    
+    # Auto-append year to input directory if not explicitly set and using default
+    if args.input_dir is None:
+        # Default: tiger_data/{year}/
+        input_dir = str(project_root / "tiger_data" / args.year)
+    else:
+        # User specified path - use as-is
+        input_dir = args.input_dir
+    
     output_dir = args.output_dir or str(project_root / "_tiger_tmp")
     db_path = args.db or str(project_root / "database" / "geocoder.duckdb")
     
@@ -495,7 +638,7 @@ def main():
     print("="*70)
     print(f"Year:              {year}")
     print(f"Database:          {db_path}")
-    print(f"Mode:              {'Append' if db_exists else 'Create new'}")
+    # print(f"Mode:              {'Append' if db_exists else 'Create new'}")
     print(f"Tiger data source: {input_dir}")
     print(f"Extract to:        {output_dir}")
     if state:
@@ -558,3 +701,6 @@ def main():
             print("You can run consolidation later with:")
             print(f"  python -m tiger_utils.load_db.duckdb.consolidator --db {db_path}")
             return
+
+if __name__ == "__main__":
+    main()

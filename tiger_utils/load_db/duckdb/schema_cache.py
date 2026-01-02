@@ -4,6 +4,7 @@ Fast schema inference and caching for TIGER/Line files.
 """
 import re
 import duckdb
+import zipfile
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -30,9 +31,10 @@ def infer_schema_from_shp(shp_path: str) -> Tuple[list, dict]:
     """
     Infer schema from SHP file using DuckDB's spatial extension.
     This is FAST - DuckDB reads just the header, not all data.
+    Supports both regular files and files inside ZIP archives.
     
     Args:
-        shp_path: Path to SHP file
+        shp_path: Path to SHP file (or /vsizip/ path for files in ZIP)
         
     Returns:
         Tuple of (column_names, column_types)
@@ -51,9 +53,10 @@ def infer_schema_from_shp(shp_path: str) -> Tuple[list, dict]:
 def infer_schema_from_dbf(dbf_path: str) -> Tuple[list, dict]:
     """
     Infer schema from DBF file using DuckDB.
+    Supports both regular files and files inside ZIP archives.
     
     Args:
-        dbf_path: Path to DBF file
+        dbf_path: Path to DBF file (or /vsizip/ path for files in ZIP)
         
     Returns:
         Tuple of (column_names, column_types)
@@ -68,6 +71,42 @@ def infer_schema_from_dbf(dbf_path: str) -> Tuple[list, dict]:
     
     conn.close()
     return columns, dtypes
+
+def infer_schema_from_zip(zip_path: str, file_ext: str = '.shp') -> Optional[Tuple[list, dict]]:
+    """
+    Infer schema from a file inside a ZIP archive without extraction.
+    Uses DuckDB's /vsizip/ virtual file system.
+    
+    Args:
+        zip_path: Path to ZIP file
+        file_ext: Extension to look for ('.shp' or '.dbf')
+        
+    Returns:
+        Tuple of (column_names, column_types) or None if no matching file found
+    """
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            # Find first file with matching extension
+            target_file = None
+            for name in zf.namelist():
+                if name.lower().endswith(file_ext.lower()):
+                    target_file = name
+                    break
+            
+            if not target_file:
+                return None
+            
+            # Use DuckDB's virtual file system: /vsizip/{zip_path}/{file_in_zip}
+            vsi_path = f"/vsizip/{zip_path}/{target_file}"
+            
+            if file_ext.lower() == '.shp':
+                return infer_schema_from_shp(vsi_path)
+            elif file_ext.lower() == '.dbf':
+                return infer_schema_from_dbf(vsi_path)
+            else:
+                return None
+    except Exception:
+        return None
 
 def get_or_infer_schema(file_path: str, use_cache: bool = True) -> Tuple[list, dict]:
     """
@@ -100,6 +139,66 @@ def get_or_infer_schema(file_path: str, use_cache: bool = True) -> Tuple[list, d
         _SCHEMA_CACHE[file_pattern] = (columns, dtypes)
     
     return columns, dtypes
+
+def batch_infer_schemas_from_zips(zip_paths: List[Path], max_workers: int = 4) -> Dict[str, Tuple[list, dict]]:
+    """
+    Infer schemas directly from ZIP files without extraction.
+    This is much faster than extracting first!
+    
+    Args:
+        zip_paths: List of ZIP file paths
+        max_workers: Number of parallel workers
+        
+    Returns:
+        Dict mapping file patterns to (columns, dtypes)
+    """
+    unique_patterns = {}
+    
+    # Find one representative ZIP per pattern
+    for zip_path in zip_paths:
+        # Extract pattern from ZIP filename (e.g., tl_2021_13001_edges.zip -> edges)
+        pattern = get_file_pattern(Path(zip_path).name)
+        if pattern and pattern not in unique_patterns:
+            # Skip if already cached
+            if pattern in _SCHEMA_CACHE:
+                continue
+            unique_patterns[pattern] = zip_path
+    
+    if not unique_patterns:
+        return {}
+    
+    # Infer schemas in parallel
+    results = {}
+    
+    def infer_from_zip(args):
+        pattern, zip_path = args
+        try:
+            # Try .shp first (for edges files), then .dbf (for addr/featnames)
+            result = infer_schema_from_zip(str(zip_path), '.shp')
+            if result is None:
+                result = infer_schema_from_zip(str(zip_path), '.dbf')
+            return pattern, result
+        except Exception as e:
+            print(f"Warning: Failed to infer schema from {zip_path}: {e}")
+            return pattern, None
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(infer_from_zip, (pattern, path))
+            for pattern, path in unique_patterns.items()
+        ]
+        
+        for future in as_completed(futures):
+            try:
+                pattern, result = future.result()
+                if result:
+                    columns, dtypes = result
+                    results[pattern] = (columns, dtypes)
+                    _SCHEMA_CACHE[pattern] = (columns, dtypes)
+            except Exception as e:
+                print(f"Warning: Schema inference failed: {e}")
+    
+    return results
 
 def batch_infer_schemas(file_paths: List[Path], max_workers: int = 4, use_cache: bool = True) -> Dict[str, Tuple[list, dict]]:
     """
