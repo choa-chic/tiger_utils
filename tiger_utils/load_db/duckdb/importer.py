@@ -10,8 +10,14 @@ import multiprocessing
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import List, Tuple
-from .schema_mapper import get_duckdb_schema
 from .loader import load_shp_to_duckdb, load_dbf_to_duckdb, load_shp_from_zip_directly
+from .schema_cache import (
+    batch_infer_schemas, 
+    save_cache_to_file, 
+    load_cache_from_file,
+    clear_cache,
+    get_cache_stats
+)
 
 try:
     from tqdm import tqdm
@@ -86,19 +92,13 @@ async def find_files_async(directory: Path, pattern: str, state_filter: str = No
 
 def import_file_wrapper(args: Tuple[Path, str, str]) -> Tuple[bool, str]:
     """
-    Wrapper function for parallel file import (optimization #1).
-    
-    Args:
-        args: Tuple of (file_path, db_path, file_type)
-    
-    Returns:
-        Tuple of (success, message)
+    Wrapper function for parallel file import with automatic schema inference.
     """
     file_path, db_path, file_type = args
     try:
         if file_type == 'shp':
-            schema = get_duckdb_schema(str(file_path))
-            load_shp_to_duckdb(str(file_path), schema, db_path, use_connection_pool=True)
+            # Schema will be auto-inferred using cache
+            load_shp_to_duckdb(str(file_path), schema=None, db_path=db_path, use_connection_pool=True)
         else:  # dbf
             load_dbf_to_duckdb(str(file_path), db_path, use_connection_pool=True)
         return True, str(file_path.name)
@@ -116,22 +116,13 @@ def import_census_to_duckdb(
     logger=None,
     max_workers: int = None,
     use_direct_zip: bool = False,
+    use_schema_cache: bool = True,
 ):
     """
-    High-level function: unzip, map schema, and load all SHP files to DuckDB.
-    With optimizations: parallel processing, async file discovery, progress bars.
+    High-level function with automatic schema inference and caching.
     
     Args:
-        input_dir: Directory containing ZIP files
-        output_dir: Directory to extract files to
-        db_path: DuckDB database file
-        recursive: Recursively search for ZIP files
-        state: State FIPS code to filter (optional)
-        shape_type: Shape type to filter (optional)
-        year: Census year to filter (optional, e.g., "2021")
-        logger: Optional logger instance (if None, sets up default logger)
-        max_workers: Max parallel workers (default: CPU count, capped at 8)
-        use_direct_zip: If True, attempt to read SHP from ZIP without extraction (optimization #4)
+        use_schema_cache: If False, force re-inference of all schemas
     """
     from tiger_utils.load_db.unzipper import unzip_all
     from tiger_utils.utils.logger import setup_logger
@@ -142,6 +133,19 @@ def import_census_to_duckdb(
         max_workers = min(multiprocessing.cpu_count(), 8)
     
     logger.info(f"Starting Census import to DuckDB (parallel workers: {max_workers})")
+    
+    # Load schema cache if it exists (unless --no-cache is specified)
+    cache_path = Path(db_path).parent / "schema_cache.json"
+    if use_schema_cache:
+        if load_cache_from_file(str(cache_path)):
+            logger.info(f"Schema cache loaded from {cache_path}")
+            cache_stats = get_cache_stats()
+            logger.info(f"  Cached patterns: {cache_stats['patterns_cached']} ({', '.join(cache_stats['patterns'])})")
+        else:
+            logger.info("No existing schema cache found")
+    else:
+        logger.info("Schema caching disabled (--no-cache)")
+        clear_cache()
     
     # Ensure input/output directories exist
     input_path = Path(input_dir)
@@ -169,6 +173,16 @@ def import_census_to_duckdb(
     dbf_files_to_import = [dbf for dbf in dbf_files if dbf.stem not in shp_stems]
     
     logger.info(f"Found {len(shp_files)} SHP files and {len(dbf_files_to_import)} DBF files to import")
+    
+    # Batch schema inference for unique file patterns (FAST - parallel + cached)
+    logger.info("Inferring schemas from file samples...")
+    all_sample_files = list(shp_files[:10]) + list(dbf_files_to_import[:10])  # Sample files
+    batch_infer_schemas(all_sample_files, max_workers=4, use_cache=use_schema_cache)
+    
+    # Save cache for next time (if caching is enabled)
+    if use_schema_cache:
+        save_cache_to_file(str(cache_path))
+        logger.info(f"Schema cache saved to {cache_path}")
     
     # Parallel import (optimization #1) with progress bar (optimization #9)
     all_files = [(f, db_path, 'shp') for f in shp_files] + [(f, db_path, 'dbf') for f in dbf_files_to_import]
@@ -223,6 +237,91 @@ def import_census_to_duckdb(
     
     if not cancelled:
         logger.info(f"Census import complete: {success_count} succeeded, {fail_count} failed")
+
+def generate_schemas(
+    input_dir: str,
+    output_dir: str,
+    db_path: str,
+    year: str = None,
+    state: str = None,
+    shape_type: str = None,
+    recursive: bool = True,
+    max_workers: int = 4,
+    logger=None
+):
+    """
+    Pre-generate schema cache for a specific year/state without importing data.
+    
+    Args:
+        input_dir: Directory containing ZIP files
+        output_dir: Directory to extract sample files to (temporary)
+        db_path: Database path (used to determine cache location)
+        year: Census year to filter
+        state: State FIPS code to filter
+        shape_type: Shape type to filter
+        recursive: Whether to search recursively
+        max_workers: Number of parallel workers for schema inference
+        logger: Logger instance
+    """
+    from tiger_utils.load_db.unzipper import unzip_all
+    from tiger_utils.utils.logger import setup_logger
+    
+    if logger is None:
+        logger = setup_logger()
+    
+    logger.info(f"Pre-generating schema cache for year={year}, state={state}, shape_type={shape_type}")
+    
+    # Ensure input/output directories exist
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
+    if not input_path.exists():
+        logger.error(f"Input directory does not exist: {input_path}")
+        raise FileNotFoundError(f"Input directory does not exist: {input_path}")
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Extract a sample of files (not all - just enough to get unique patterns)
+    logger.info("Extracting sample files...")
+    unzip_all(str(input_path), str(output_path), recursive=recursive, state=state, shape_type=shape_type)
+    
+    # Async file discovery
+    logger.info("Discovering sample files...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    shp_files = loop.run_until_complete(find_files_async(output_path, "*.shp", state, year))
+    dbf_files = loop.run_until_complete(find_files_async(output_path, "*.dbf", state, year))
+    loop.close()
+    
+    # Exclude .dbf files that have a .shp with the same stem
+    shp_stems = {shp_path.stem for shp_path in shp_files}
+    dbf_files_unique = [dbf for dbf in dbf_files if dbf.stem not in shp_stems]
+    
+    all_files = list(shp_files) + list(dbf_files_unique)
+    
+    if not all_files:
+        logger.warning("No files found to generate schemas from")
+        return
+    
+    logger.info(f"Found {len(all_files)} files ({len(shp_files)} SHP, {len(dbf_files_unique)} DBF)")
+    
+    # Infer all unique schemas in parallel (force re-inference)
+    clear_cache()  # Start fresh
+    logger.info(f"Inferring schemas from all unique patterns (workers: {max_workers})...")
+    results = batch_infer_schemas(all_files, max_workers=max_workers, use_cache=False)
+    
+    # Save cache
+    cache_path = Path(db_path).parent / "schema_cache.json"
+    save_cache_to_file(str(cache_path))
+    
+    # Print summary
+    logger.info("="*70)
+    logger.info("SCHEMA GENERATION COMPLETE")
+    logger.info("="*70)
+    logger.info(f"Schemas inferred: {len(results)}")
+    logger.info(f"Cache saved to:   {cache_path}")
+    logger.info(f"Patterns cached:  {', '.join(sorted(results.keys()))}")
+    logger.info("="*70)
+    logger.info("You can now run import with these cached schemas:")
+    logger.info(f"  python -m tiger_utils.load_db.duckdb.importer --year {year} --state {state or 'ALL'}")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -283,6 +382,18 @@ def main():
         action="store_true",
         help="Skip automatic table consolidation and indexing after import",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_false",
+        dest="use_cache",
+        default=True,
+        help="Force schema re-inference (ignore cached schemas)",
+    )
+    parser.add_argument(
+        "--generate-schemas",
+        action="store_true",
+        help="Pre-generate schema cache for specified year/state (no data import)",
+    )
     args = parser.parse_args()
 
     # Determine project root (three levels up from this file)
@@ -290,9 +401,50 @@ def main():
     input_dir = args.input_dir or str(project_root / "tiger_data")
     output_dir = args.output_dir or str(project_root / "_tiger_tmp")
     db_path = args.db or str(project_root / "database" / "geocoder.duckdb")
+    
     # Ensure database directory exists
     db_dir = Path(db_path).parent
     db_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Handle --generate-schemas mode
+    if args.generate_schemas:
+        print("\n" + "="*70)
+        print("SCHEMA GENERATION MODE")
+        print("="*70)
+        print(f"Year:              {args.year}")
+        print(f"State filter:      {args.state or 'ALL'}")
+        print(f"Shape type filter: {args.shape_type or 'ALL'}")
+        print(f"Tiger data source: {input_dir}")
+        print(f"Cache location:    {db_dir / 'schema_cache.json'}")
+        print(f"Workers:           {args.workers or 4}")
+        print("="*70)
+        print("\nThis will extract sample files and infer all unique schemas.")
+        print("No data will be imported into the database.")
+        
+        try:
+            response = input("\nProceed with schema generation? (Y/n): ").strip().lower()
+        except KeyboardInterrupt:
+            print("\n\nSchema generation cancelled.")
+            return
+        
+        if response in ("n", "no"):
+            print("Schema generation cancelled.")
+            return
+        
+        try:
+            generate_schemas(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                db_path=db_path,
+                year=args.year,
+                state=args.state,
+                shape_type=args.shape_type,
+                recursive=args.recursive,
+                max_workers=args.workers or 4
+            )
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Schema generation interrupted by user")
+        return
     
     # Check if database already exists
     db_exists = Path(db_path).exists()
@@ -333,6 +485,7 @@ def main():
     max_workers = args.workers
     use_direct_zip = args.direct_zip
     skip_consolidation = args.skip_consolidation
+    use_cache = args.use_cache
 
     if max_workers is None:
         max_workers = min(multiprocessing.cpu_count(), 8)
@@ -352,6 +505,7 @@ def main():
     print(f"Recursive search:  {recursive}")
     print(f"Parallel workers:  {max_workers}")
     print(f"Direct ZIP read:   {use_direct_zip}")
+    print(f"Schema caching:    {use_cache}")
     print(f"Auto consolidate:  {not skip_consolidation}")
     print("="*70)
     
@@ -377,6 +531,7 @@ def main():
             year=year,
             max_workers=max_workers,
             use_direct_zip=use_direct_zip,
+            use_schema_cache=use_cache,
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Import interrupted by user")
@@ -403,6 +558,3 @@ def main():
             print("You can run consolidation later with:")
             print(f"  python -m tiger_utils.load_db.duckdb.consolidator --db {db_path}")
             return
-
-if __name__ == "__main__":
-    main()

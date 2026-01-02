@@ -85,7 +85,7 @@ class TigerETL:
         logger.debug("Transforming data...")
         linezip = self._build_linezip(edges, addr)
         features = self._build_features(linezip, featnames)
-        feature_edges = self._build_feature_edges(linezip, featnames)
+        feature_edges = self._build_feature_edges(linezip, featnames, features)
         ranges = self._build_ranges(edges, addr)
 
         # 3. Batch insert to permanent tables
@@ -241,19 +241,31 @@ class TigerETL:
         return features
 
     def _build_feature_edges(
-        self, linezip: Dict[int, Set[str]], featnames: List[Dict]
+        self, linezip: Dict[int, Set[str]], featnames: List[Dict], features: List[Tuple]
     ) -> List[Tuple]:
         """
-        Build feature_edge join records.
+        Build feature_edge join records (junction table linking features to edges).
 
         Args:
             linezip: TLID -> ZIP mapping
             featnames: List of feature name records
+            features: List of already-inserted feature tuples to map to fids
 
         Returns:
-            List of (street, street_phone, zip, tlid) tuples
+            List of (fid, tlid) tuples
         """
         feature_edges = []
+        
+        # Create a mapping from (street, street_phone, zip) to fid
+        # Note: in real implementation, we'd query the database to get the fid values
+        # For now, we'll build this mapping based on insertion order
+        feature_map = {}
+        fid = 1
+        for street, street_phone, paflag, zip_code in features:
+            key = (street, street_phone, zip_code)
+            if key not in feature_map:
+                feature_map[key] = fid
+                fid += 1
 
         for f in featnames:
             if not f["fullname"] or f["fullname"] == "":
@@ -266,9 +278,10 @@ class TigerETL:
             street_phone = compute_metaphone(f["fullname"], 5)
 
             for zip_code in zips:
-                feature_edges.append(
-                    (f["fullname"], street_phone, zip_code, tlid)
-                )
+                key = (f["fullname"], street_phone, zip_code)
+                fid_val = feature_map.get(key)
+                if fid_val is not None:
+                    feature_edges.append((fid_val, tlid))
 
         return feature_edges
 
@@ -369,8 +382,8 @@ class TigerETL:
                 batch = feature_edges[i : i + self.batch_size]
                 cur.executemany(
                     """
-                    INSERT INTO feature_edge (street, street_phone, zip, tlid)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO feature_edge (fid, tlid)
+                    VALUES (?, ?)
                     """,
                     batch,
                 )
