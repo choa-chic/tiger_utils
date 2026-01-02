@@ -90,7 +90,7 @@ def is_valid_tiger_filename(filename: str, year: str = None, state: str = None) 
     # YYYY = 4-digit year
     # SSCCC = 5-digit FIPS (2-digit state + 3-digit county) or just SS for state files
     # FEAT = feature type (edges, faces, addr, featnames, etc.)
-    pattern = r'^tl_(\d{4})_(\d{2,5})_([a-z0-9]+)\.(shp|dbf|shx|prj)$'
+    pattern = r'^tl_(\d{4})_(\d{2,5})_([a-z0-9]+)\.(shp|dbf|shx|prj|zip)$'
     match = re.match(pattern, filename.lower())
     
     if not match:
@@ -593,7 +593,7 @@ def main():
     db_exists = Path(db_path).exists()
     if db_exists:
         print("\n" + "="*70)
-        print("⚠️  DATABASE ALREADY EXISTS")
+        print("[WARNING] DATABASE ALREADY EXISTS")
         print("="*70)
         print(f"Database file: {db_path}")
         print(f"File size:     {Path(db_path).stat().st_size / (1024*1024):.2f} MB")
@@ -606,7 +606,7 @@ def main():
         choice = input("\nEnter choice (A/R/C): ").strip().upper()
         
         if choice == "R":
-            confirm = input(f"\n⚠️  Are you sure you want to DELETE {db_path}? (yes/no): ").strip().lower()
+            confirm = input(f"\n[WARNING] Are you sure you want to DELETE {db_path}? (yes/no): ").strip().lower()
             if confirm == "yes":
                 Path(db_path).unlink()
                 print(f"✓ Deleted {db_path}")

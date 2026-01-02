@@ -27,6 +27,9 @@ def get_optimized_connection(db_path: str) -> duckdb.DuckDBPyConnection:
         conn.execute(f"SET memory_limit='8GB';")  # Adjust based on available RAM
         conn.execute(f"SET threads={multiprocessing.cpu_count()};")  # Use all CPU cores
         conn.execute("SET checkpoint_threshold='1GB';")  # Reduce checkpoint frequency during bulk loads
+        # Load spatial extension
+        conn.execute("INSTALL spatial;")
+        conn.execute("LOAD spatial;")
         
         _thread_local.connection = conn
         _thread_local.db_path = db_path
@@ -43,13 +46,20 @@ def load_shp_to_duckdb(
     Load a single SHP file into DuckDB with automatic schema inference.
     Supports both regular files and /vsizip/ paths for direct ZIP reading.
     """
-    conn = get_connection(db_path) if use_connection_pool else get_optimized_connection(db_path)
+    conn = get_optimized_connection(db_path)
     
     try:
         # Infer schema if not provided (uses cache)
         if schema is None:
             columns, dtypes = get_or_infer_schema(shp_path, use_cache=True)
-            schema = {'table_name': Path(shp_path).stem, 'columns': columns, 'dtypes': dtypes}
+            # Extract table name from the file path (handles /vsizip/ paths)
+            if '/vsizip/' in shp_path:
+                # Extract from the inner file: /vsizip/path/to/file.zip/inner_file.shp
+                inner_file = shp_path.split('/')[-1]
+                table_name = Path(inner_file).stem
+            else:
+                table_name = Path(shp_path).stem
+            schema = {'table_name': table_name, 'columns': columns, 'dtypes': dtypes}
         
         table_name = schema["table_name"]
         
@@ -60,8 +70,7 @@ def load_shp_to_duckdb(
         conn.execute(f"INSERT INTO {table_name} SELECT * FROM st_read('{shp_path}');")
         
     finally:
-        if not use_connection_pool:
-            conn.close()
+        pass  # Don't close connection pool connections
 
 def load_from_zip(
     zip_path: str,
@@ -104,106 +113,68 @@ def load_from_zip(
 def load_dbf_to_duckdb(dbf_path: str, db_path: str, table_name: str = None, 
                        use_connection_pool: bool = True) -> None:
     """
-    Loads a .dbf file (non-spatial, e.g. addr, featnames) into DuckDB with optimizations.
-    Handles schema differences by checking compatibility or recreating table.
-    - dbf_path: path to .dbf file
-    - db_path: DuckDB database file
-    - table_name: optional, defaults to stem of dbf_path (keeps county-specific names)
-    - use_connection_pool: if True, uses thread-local connection (optimization #3)
+    Loads a .dbf file (non-spatial, e.g. addr, featnames) into DuckDB.
+    Supports both regular files and /vsizip/ paths for direct ZIP reading.
+    Uses DuckDB's st_read which handles DBF files natively.
+    
+    Args:
+        dbf_path: Path to .dbf file (or /vsizip/ path)
+        db_path: DuckDB database file
+        table_name: Optional, defaults to stem of dbf_path (keeps county-specific names)
+        use_connection_pool: If True, uses thread-local connection (optimization #3)
     """
     logger = get_logger()
+    
     if table_name is None:
-        # Keep the full filename as table name (includes county code) to avoid conflicts
-        table_name = os.path.splitext(os.path.basename(dbf_path))[0]
+        # Extract table name from path (handles /vsizip/ paths)
+        if '/vsizip/' in dbf_path:
+            # Extract from the inner file: /vsizip/path/to/file.zip/inner_file.dbf
+            inner_file = dbf_path.split('/')[-1]
+            table_name = os.path.splitext(inner_file)[0]
+        else:
+            table_name = os.path.splitext(os.path.basename(dbf_path))[0]
+    
+    conn = get_optimized_connection(db_path)
     
     try:
-        # Read DBF using pandas (requires 'dbfread')
-        try:
-            import dbfread
-            # Try multiple encodings to handle non-ASCII characters
-            encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
-            records = None
-            last_error = None
+        # Check if table exists
+        exists = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = ?",
+            [table_name]
+        ).fetchone()
+        
+        if exists:
+            # Table exists - check schema compatibility
+            existing_cols = set([
+                row[0].lower() for row in conn.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                    [table_name]
+                ).fetchall()
+            ])
             
-            for encoding in encodings:
-                try:
-                    records = list(dbfread.DBF(dbf_path, encoding=encoding, load=True))
-                    break  # Success, use this encoding
-                except (UnicodeDecodeError, UnicodeError) as e:
-                    last_error = e
-                    continue
+            # Get columns from the DBF file
+            result = conn.execute(f"SELECT * FROM st_read('{dbf_path}') LIMIT 0")
+            new_cols = set([desc[0].lower() for desc in result.description])
             
-            if records is None:
-                # All encodings failed, try with ignore errors
-                logger.warning(f"Encoding issues with {dbf_path}, using latin-1 with error handling")
-                records = list(dbfread.DBF(dbf_path, encoding='latin-1', char_decode_errors='ignore', load=True))
-            
-            if not records:
-                logger.warning(f"No records found in {dbf_path}")
+            if existing_cols != new_cols:
+                # Schema mismatch
+                logger.warning(
+                    f"Skipping {dbf_path}: table {table_name} exists with different schema "
+                    f"(expected {sorted(new_cols)}, found {sorted(existing_cols)})"
+                )
                 return
-            df = pd.DataFrame(records)
-        except ImportError:
-            logger.error("dbfread is not installed. Cannot import DBF.")
-            return
-        
-        # Use connection pool or create new connection
-        if use_connection_pool:
-            con = get_optimized_connection(db_path)
-            should_close = False
         else:
-            con = duckdb.connect(db_path)
-            should_close = True
+            # Create table
+            logger.debug(f"Creating table {table_name}")
+            conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM st_read('{dbf_path}') LIMIT 0;")
         
-        try:
-            # Check if table exists and validate schema BEFORE starting transaction
-            table_exists = con.execute(
-                "SELECT 1 FROM information_schema.tables WHERE table_name = ?",
-                [table_name]
-            ).fetchone()
-            
-            if table_exists:
-                # Get existing table columns
-                existing_cols = set([
-                    row[0].lower() for row in con.execute(
-                        "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
-                        [table_name]
-                    ).fetchall()
-                ])
-                new_cols = set([col.lower() for col in df.columns])
-                
-                # If schemas don't match, this table already exists with different structure
-                if existing_cols != new_cols:
-                    logger.warning(
-                        f"Skipping {dbf_path}: table {table_name} exists with different schema "
-                        f"(existing={len(existing_cols)} cols, new={len(new_cols)} cols)"
-                    )
-                    return
-            
-            # Schema is compatible or table doesn't exist - proceed with import
-            con.execute("BEGIN TRANSACTION;")
-            
-            try:
-                # Register the dataframe with DuckDB
-                con.register('df_temp', df)
-                
-                if not table_exists:
-                    # Create new table from dataframe
-                    con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df_temp;")
-                else:
-                    # Insert into existing compatible table
-                    con.execute(f"INSERT INTO {table_name} SELECT * FROM df_temp;")
-                
-                con.execute("COMMIT;")
-                logger.debug(f"Imported DBF {os.path.basename(dbf_path)} into {table_name} ({len(df)} rows)")
-            except Exception as e:
-                con.execute("ROLLBACK;")
-                logger.error(f"Failed to import DBF {dbf_path}: {e}")
-                raise
-        finally:
-            if should_close:
-                con.close()
+        # Insert data
+        logger.debug(f"Inserting data into {table_name}")
+        conn.execute(f"INSERT INTO {table_name} SELECT * FROM st_read('{dbf_path}');")
+        
     except Exception as e:
-        logger.error(f"Failed to process DBF {dbf_path}: {e}")
+        logger.error(f"Error loading {dbf_path}: {e}")
+        raise
 
 def load_shp_from_zip_directly(zip_path: str, shp_name: str, db_path: str, table_name: str = None) -> None:
     """

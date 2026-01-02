@@ -23,7 +23,7 @@ def get_file_pattern(filename: str) -> Optional[str]:
     Returns:
         Feature type (e.g., "edges", "addr") or None if invalid
     """
-    pattern = r'^tl_\d{4}_\d{2,5}_([a-z0-9]+)\.(shp|dbf)$'
+    pattern = r'^tl_\d{4}_\d{2,5}_([a-z0-9]+)\.(shp|dbf|zip)$'
     match = re.match(pattern, filename.lower())
     return match.group(1) if match else None
 
