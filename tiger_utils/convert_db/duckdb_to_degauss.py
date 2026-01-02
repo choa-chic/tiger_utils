@@ -399,8 +399,8 @@ def convert_to_degauss(
         
         # Compress the database (DuckDB-specific)
         logger.info("Compressing database...")
-        target_conn.execute("PRAGMA compression_format='snappy';")
-        logger.info("Compression enabled (snappy)")
+        target_conn.execute("PRAGMA force_compression='ZSTD';")
+        logger.info("Compression enabled (ZSTD)")
         
         # Final database size after optimization
         if os.path.exists(target_db):
