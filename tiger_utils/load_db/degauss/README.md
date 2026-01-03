@@ -24,7 +24,7 @@ python -m tiger_utils.load_db.degauss.importer_cli --state 13 --year 2025
 python -m tiger_utils.load_db.degauss.importer_cli /path/to/geocoder.db /path/to/tiger_files --state 13 --year 2025
 
 # Import all available TIGER files in current year
-python -m tiger_utils.load_db.degauss.importer_cli --year 2025
+python -m tiger_utils.load_db.degauss.importer_cli --year 2021
 
 # Import specific counties
 python -m tiger_utils.load_db.degauss.importer_cli 06001 06007 06019
