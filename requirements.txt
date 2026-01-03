@@ -25,12 +25,16 @@ pytest-cov
 jellyfish
 Metaphone
 
-# Data analysis and visualization
+# Data analysis 
 pandas
 jupyter
 ipywidgets
 nbconvert
+
+# visualization
 matplotlib
+pydeck
+plotly
 
 # Progress bars
 tqdm
