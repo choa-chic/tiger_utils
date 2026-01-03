@@ -22,6 +22,7 @@ import argparse
 from pathlib import Path
 import jellyfish
 import sys
+import pandas as pd
 from tiger_utils.utils.logger import get_logger
 
 logger = get_logger()
@@ -200,9 +201,12 @@ def build_range_table(con_out):
         SELECT tlid, fromhn, tohn, zip, side FROM pq_addr
     """).fetchdf()
     if not df.empty:
-        df["fromhn_digit"] = df["fromhn"].apply(digit_suffix)
-        df["tohn_digit"] = df["tohn"].apply(digit_suffix)
-        df["prenum"] = df["fromhn"].apply(nondigit_prefix)
+        df.columns = [c.lower() for c in df.columns]
+        fromhn_series = df.get("fromhn", pd.Series([""] * len(df)))
+        tohn_series = df.get("tohn", pd.Series([""] * len(df)))
+        df["fromhn_digit"] = fromhn_series.apply(digit_suffix)
+        df["tohn_digit"] = tohn_series.apply(digit_suffix)
+        df["prenum"] = fromhn_series.apply(nondigit_prefix)
     else:
         df["fromhn_digit"] = []
         df["tohn_digit"] = []
@@ -220,7 +224,7 @@ def main(parquet_db, output_db):
     duckdb_optimization(con_out, parquet_db)
 
     logger.info("Materializing parquet-derived tables from %s", parquet_db)
-    # Materialize minimal columns into temporary permanent tables in the output DB
+    # Materialize minimal columns into temporary permanent tables in the output DB from the TIGER/Line database
     con_out.execute("DROP TABLE IF EXISTS pq_addr")
     con_out.execute("CREATE TABLE pq_addr AS SELECT tlid, zip, fromhn, tohn, side FROM src.tiger_addr")
     con_out.execute("CREATE INDEX IF NOT EXISTS idx_addr_tlid ON pq_addr(tlid)")
