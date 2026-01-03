@@ -1,4 +1,13 @@
+"""
+CLI for TIGER/Line Parquet utilities: convert zips to Parquet or register Parquet as DuckDB views.
 
+Usage:
+    # to convert zipped shapefiles (including shape and dbf) to parquet
+    python -m tiger_utils.load_db.parquet.pq_cli convert --year 2021
+
+    # to register parquet files as DuckDB views
+    python -m tiger_utils.load_db.parquet.pq_cli register --year 2021
+"""
 import argparse
 from pathlib import Path
 from tiger_utils.load_db.parquet.zip_to_parquet import convert_all
