@@ -99,7 +99,7 @@ def build_linezip(con_out):
         SELECT DISTINCT tlid, zipl AS zip FROM src.tiger_edges
             WHERE mtfcc LIKE 'S%' AND zipl IS NOT NULL AND zipl <> ''
     """)
-    con_out.execute("CREATE OR REPLACE INDEX linezip_tlid ON linezip(tlid)")
+    con_out.execute("CREATE INDEX IF NOT EXISTS linezip_tlid ON linezip(tlid)")
 
 def build_feature_bin(con_out):
     """
@@ -125,7 +125,7 @@ def build_feature_bin(con_out):
         SELECT NULL AS fid, street, street_phone, paflag, zip FROM _df_feature_bin
     """)
     # Add index for later joins
-    con_out.execute("CREATE OR REPLACE INDEX feature_bin_idx ON feature_bin(street, zip)")
+    con_out.execute("CREATE INDEX IF NOT EXISTS feature_bin_idx ON feature_bin(street, zip)")
 
 def build_feature_table(con_out):
     """
@@ -154,7 +154,7 @@ def build_feature_edge(con_out):
         JOIN feature_bin b ON l.zip = b.zip AND fn.fullname = b.street AND fn.paflag = b.paflag
         JOIN feature f ON b.street = f.street AND b.zip = f.zip AND b.paflag = f.paflag
     """)
-    con_out.execute("CREATE OR REPLACE INDEX feature_edge_fid_idx ON feature_edge(fid)")
+    con_out.execute("CREATE INDEX IF NOT EXISTS feature_edge_fid_idx ON feature_edge(fid)")
 
 def build_edge_table(con_out):
     """
@@ -213,7 +213,7 @@ def build_range_table(con_out):
         CREATE TABLE range AS
         SELECT tlid, fromhn_digit AS fromhn, tohn_digit AS tohn, prenum, zip, side FROM _df_range
     """)
-    con_out.execute("CREATE OR REPLACE INDEX range_tlid_idx ON range(tlid)")
+    con_out.execute("CREATE INDEX IF NOT EXISTS range_tlid_idx ON range(tlid)")
 
 def main(parquet_db, output_db):
     con_out = duckdb.connect(str(output_db))
@@ -223,15 +223,15 @@ def main(parquet_db, output_db):
     # Materialize minimal columns into temporary permanent tables in the output DB
     con_out.execute("DROP TABLE IF EXISTS pq_addr")
     con_out.execute("CREATE TABLE pq_addr AS SELECT tlid, zip, fromhn, tohn, side FROM src.tiger_addr")
-    con_out.execute("CREATE OR REPLACE INDEX idx_addr_tlid ON pq_addr(tlid)")
+    con_out.execute("CREATE INDEX IF NOT EXISTS idx_addr_tlid ON pq_addr(tlid)")
 
     con_out.execute("DROP TABLE IF EXISTS pq_featnames")
     con_out.execute("CREATE TABLE pq_featnames AS SELECT tlid, fullname, paflag FROM src.tiger_featnames")
-    con_out.execute("CREATE OR REPLACE INDEX idx_featnames_tlid ON pq_featnames(tlid)")
+    con_out.execute("CREATE INDEX IF NOT EXISTS idx_featnames_tlid ON pq_featnames(tlid)")
 
     con_out.execute("DROP TABLE IF EXISTS pq_edges")
     con_out.execute("CREATE TABLE pq_edges AS SELECT tlid, geometry FROM src.tiger_edges")
-    con_out.execute("CREATE OR REPLACE INDEX idx_edges_tlid ON pq_edges(tlid)")
+    con_out.execute("CREATE INDEX IF NOT EXISTS idx_edges_tlid ON pq_edges(tlid)")
 
     # --- Build tables matching the original SQLite logic ---
     build_linezip(con_out)
