@@ -81,10 +81,142 @@ def duckdb_optimization(con_out, parquet_db):
         # ignore if threads pragma not available or this call fails
         pass
 
+def build_linezip(con_out):
+    """
+    Build the linezip table matching the original SQLite logic:
+    - For all tlid/zip pairs from tiger_addr
+    - For all street edges (mtfcc LIKE 'S%') with zipr or zipl from tiger_edges
+    """
+    logger.info("Building linezip table (edge-to-ZIP mapping)")
+    con_out.execute("DROP TABLE IF EXISTS linezip")
+    con_out.execute("""
+        CREATE TABLE linezip AS
+        SELECT DISTINCT tlid, zip FROM pq_addr
+        UNION
+        SELECT DISTINCT tlid, zipr AS zip FROM src.tiger_edges
+            WHERE mtfcc LIKE 'S%' AND zipr IS NOT NULL AND zipr <> ''
+        UNION
+        SELECT DISTINCT tlid, zipl AS zip FROM src.tiger_edges
+            WHERE mtfcc LIKE 'S%' AND zipl IS NOT NULL AND zipl <> ''
+    """)
+    con_out.execute("CREATE OR REPLACE INDEX linezip_tlid ON linezip(tlid)")
+
+def build_feature_bin(con_out):
+    """
+    Build feature_bin table as in the original SQL:
+    - For each edge in linezip, join to featnames, compute metaphone, and assign zip.
+    """
+    logger.info("Building feature_bin table (features with metaphone and zip)")
+    con_out.execute("DROP TABLE IF EXISTS feature_bin")
+    # Join linezip to pq_featnames, filter for non-empty names
+    df = con_out.execute("""
+        SELECT DISTINCT f.fullname AS street, f.paflag AS paflag, l.zip AS zip
+        FROM linezip l
+        JOIN pq_featnames f ON l.tlid = f.tlid
+        WHERE f.fullname IS NOT NULL AND f.fullname <> ''
+    """).fetchdf()
+    if not df.empty:
+        df["street_phone"] = df["street"].fillna("").apply(metaphone5)
+    else:
+        df["street_phone"] = []
+    con_out.register("_df_feature_bin", df)
+    con_out.execute("""
+        CREATE TABLE feature_bin AS
+        SELECT NULL AS fid, street, street_phone, paflag, zip FROM _df_feature_bin
+    """)
+    # Add index for later joins
+    con_out.execute("CREATE OR REPLACE INDEX feature_bin_idx ON feature_bin(street, zip)")
+
+def build_feature_table(con_out):
+    """
+    Assign fid (row_number) to feature_bin and create the feature table.
+    """
+    logger.info("Building feature table (assigning fid)")
+    con_out.execute("DROP TABLE IF EXISTS feature")
+    con_out.execute("""
+        CREATE TABLE feature AS
+        SELECT row_number() OVER () AS fid, street, street_phone, paflag, zip
+        FROM feature_bin
+    """)
+
+def build_feature_edge(con_out):
+    """
+    Build feature_edge table as in the original SQL:
+    - Join linezip, pq_featnames, and feature_bin on tlid, zip, street, paflag.
+    """
+    logger.info("Building feature_edge table")
+    con_out.execute("DROP TABLE IF EXISTS feature_edge")
+    con_out.execute("""
+        CREATE TABLE feature_edge AS
+        SELECT DISTINCT f.fid, fn.tlid
+        FROM linezip l
+        JOIN pq_featnames fn ON l.tlid = fn.tlid
+        JOIN feature_bin b ON l.zip = b.zip AND fn.fullname = b.street AND fn.paflag = b.paflag
+        JOIN feature f ON b.street = f.street AND b.zip = f.zip AND b.paflag = f.paflag
+    """)
+    con_out.execute("CREATE OR REPLACE INDEX feature_edge_fid_idx ON feature_edge(fid)")
+
+def build_edge_table(con_out):
+    """
+    Insert edges for each tlid in linezip with non-empty fullname.
+    """
+    logger.info("Building edge table (geometry for named street edges)")
+    con_out.execute("DROP TABLE IF EXISTS edge")
+    con_out.execute("""
+        CREATE TABLE edge AS
+        SELECT e.tlid, e.geometry
+        FROM (SELECT DISTINCT tlid FROM linezip) l
+        JOIN pq_edges e ON l.tlid = e.tlid
+        JOIN pq_featnames f ON e.tlid = f.tlid
+        WHERE f.fullname IS NOT NULL AND f.fullname <> ''
+    """)
+
+def digit_suffix(s):
+    """
+    Extract digit suffix from a string (e.g., 'A123' -> '123').
+    """
+    import re
+    if not s:
+        return ""
+    m = re.search(r"(\d+)$", s)
+    return m.group(1) if m else ""
+
+def nondigit_prefix(s):
+    """
+    Extract non-digit prefix from a string (e.g., 'A123' -> 'A').
+    """
+    import re
+    if not s:
+        return ""
+    m = re.match(r"^([^\d]*)", s)
+    return m.group(1) if m else ""
+
+def build_range_table(con_out):
+    """
+    Insert ranges from pq_addr, splitting house numbers into digit suffix and non-digit prefix.
+    """
+    logger.info("Building range table (splitting house numbers)")
+    df = con_out.execute("""
+        SELECT tlid, fromhn, tohn, zip, side FROM pq_addr
+    """).fetchdf()
+    if not df.empty:
+        df["fromhn_digit"] = df["fromhn"].apply(digit_suffix)
+        df["tohn_digit"] = df["tohn"].apply(digit_suffix)
+        df["prenum"] = df["fromhn"].apply(nondigit_prefix)
+    else:
+        df["fromhn_digit"] = []
+        df["tohn_digit"] = []
+        df["prenum"] = []
+    con_out.register("_df_range", df)
+    con_out.execute("DROP TABLE IF EXISTS range")
+    con_out.execute("""
+        CREATE TABLE range AS
+        SELECT tlid, fromhn_digit AS fromhn, tohn_digit AS tohn, prenum, zip, side FROM _df_range
+    """)
+    con_out.execute("CREATE OR REPLACE INDEX range_tlid_idx ON range(tlid)")
+
 def main(parquet_db, output_db):
     con_out = duckdb.connect(str(output_db))
-    # Try to enable on-disk compression for DuckDB if supported (best-effort)
-    
     duckdb_optimization(con_out, parquet_db)
 
     logger.info("Materializing parquet-derived tables from %s", parquet_db)
@@ -96,52 +228,18 @@ def main(parquet_db, output_db):
     con_out.execute("DROP TABLE IF EXISTS pq_featnames")
     con_out.execute("CREATE TABLE pq_featnames AS SELECT tlid, fullname, paflag FROM src.tiger_featnames")
     con_out.execute("CREATE OR REPLACE INDEX idx_featnames_tlid ON pq_featnames(tlid)")
-    
+
     con_out.execute("DROP TABLE IF EXISTS pq_edges")
     con_out.execute("CREATE TABLE pq_edges AS SELECT tlid, geometry FROM src.tiger_edges")
     con_out.execute("CREATE OR REPLACE INDEX idx_edges_tlid ON pq_edges(tlid)")
 
-    # Build distinct feature candidates (street, paflag, zip) using SQL set operations
-    logger.info("Extracting distinct street names for metaphone computation")
-    con_out.execute("DROP TABLE IF EXISTS feat_candidates")
-    con_out.execute(
-        "CREATE TABLE feat_candidates AS SELECT f.fullname AS street, f.paflag AS paflag, a.zip AS zip " \
-        "FROM pq_featnames f " \
-        "LEFT JOIN pq_addr a USING (tlid)"
-    )
-
-    # Pull distinct streets into pandas to compute metaphone vectorized
-    df = con_out.execute("SELECT street, paflag, zip FROM feat_candidates").fetchdf().drop_duplicates()
-    if not df.empty:
-        df["street_phone"] = df["street"].fillna("").apply(metaphone5)
-    else:
-        df["street_phone"] = []
-
-    # Register DataFrame and create feature_distinct table
-    con_out.register("_df_feat", df)
-    con_out.execute("DROP TABLE IF EXISTS feature_distinct")
-    con_out.execute("CREATE TABLE feature_distinct AS SELECT * FROM _df_feat")
-
-    # Create feature table with generated fid using window function
-    con_out.execute("DROP TABLE IF EXISTS feature")
-    con_out.execute(
-        "CREATE TABLE feature AS SELECT row_number() OVER () AS fid, street, street_phone, paflag, zip FROM feature_distinct"
-    )
-
-    # Build feature_edge via SQL joins
-    logger.info("Building feature_edge table via SQL joins")
-    con_out.execute("DROP TABLE IF EXISTS feature_edge")
-    con_out.execute(
-        "CREATE TABLE feature_edge AS SELECT f.fid, t.tlid FROM pq_featnames t JOIN feature_distinct d ON t.fullname = d.street JOIN feature f ON f.street = d.street AND (f.zip = d.zip OR (f.zip IS NULL AND d.zip IS NULL))"
-    )
-
-    # Create range table directly from pq_addr
-    con_out.execute("DROP TABLE IF EXISTS range")
-    con_out.execute("CREATE TABLE range AS SELECT tlid, fromhn, tohn, side, zip FROM pq_addr")
-
-    # Create edge table from pq_edges
-    con_out.execute("DROP TABLE IF EXISTS edge")
-    con_out.execute("CREATE TABLE edge AS SELECT tlid, geometry FROM pq_edges")
+    # --- Build tables matching the original SQLite logic ---
+    build_linezip(con_out)
+    build_feature_bin(con_out)
+    build_feature_table(con_out)
+    build_feature_edge(con_out)
+    build_edge_table(con_out)
+    build_range_table(con_out)
 
     # Load place table SQL (prebuilt inserts)
     try:
@@ -152,7 +250,6 @@ def main(parquet_db, output_db):
             try:
                 con_out.execute(sql_text)
             except Exception:
-                # Fall back to executing individual statements
                 for stmt in [s.strip() for s in sql_text.split(';') if s.strip()]:
                     try:
                         con_out.execute(stmt)
@@ -202,13 +299,15 @@ def main(parquet_db, output_db):
         con_out.execute("DROP TABLE IF EXISTS pq_addr")
         con_out.execute("DROP TABLE IF EXISTS pq_featnames")
         con_out.execute("DROP TABLE IF EXISTS pq_edges")
-        con_out.execute("DROP TABLE IF EXISTS feat_candidates")
-        con_out.execute("DROP TABLE IF EXISTS feature_distinct")
-        # Attempt to unregister the temporary DataFrame registration if supported
+        con_out.execute("DROP TABLE IF EXISTS linezip")
+        con_out.execute("DROP TABLE IF EXISTS feature_bin")
         try:
-            con_out.unregister("_df_feat")
+            con_out.unregister("_df_feature_bin")
         except Exception:
-            # ignore if unregister not available or fails
+            pass
+        try:
+            con_out.unregister("_df_range")
+        except Exception:
             pass
         con_out.commit()
         logger.info("Intermediate tables dropped")
