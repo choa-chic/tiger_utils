@@ -5,7 +5,7 @@ Download command - Download TIGER/Line shapefiles from US Census Bureau
 import asyncio
 from pathlib import Path
 
-from tiger_utils.download.downloader import download_county_data, download_urls
+from tiger_utils.download.downloader import download_county_data, download_urls, download_data_auto
 from tiger_utils.download.progress_manager import DownloadState, DownloadStateDB
 from tiger_utils.download.discover import discover_state_files, discover_state_files_multi
 from tiger_utils.download.url_patterns import (
@@ -47,7 +47,31 @@ def cmd_download(args):
     state_file_base = output_dir / args.progress_file
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.states:
+    # State tracking backend
+    use_db = args.use_db  # True unless --no-use-db is passed
+    download_state = create_state_tracker(state_file_base, use_db=use_db)
+    
+    # Load saved configuration if not explicitly specified
+    saved_config = download_state.get_config()
+    if saved_config:
+        logger.info(f"Found saved configuration from previous run: year={saved_config.get('year')}, "
+                   f"states={len(saved_config.get('states', []))} state(s), "
+                   f"types={saved_config.get('dataset_types')}")
+    
+    # Determine year (command line > saved config > default)
+    if hasattr(args, 'year') and args.year != 2025:  # 2025 is default
+        year = args.year
+    elif saved_config and 'year' in saved_config:
+        year = saved_config['year']
+        logger.info(f"Using saved year: {year}")
+    else:
+        year = args.year
+
+    # Determine states
+    if getattr(args, 'all_states', False):
+        state_list = sorted(FIFTY_STATE_FIPS)
+        logger.info("--all-states flag set: using all 50 US states.")
+    elif args.states:
         state_list = [s.strip().zfill(2) for s in args.states.split(',')]
         invalid = [s for s in state_list if s not in STATES]
         if invalid:
@@ -57,6 +81,9 @@ def cmd_download(args):
         if not args.include_territories:
             if not any(s in TERRITORY_FIPS for s in state_list):
                 state_list = [s for s in state_list if s in FIFTY_STATE_FIPS]
+    elif saved_config and 'states' in saved_config:
+        state_list = saved_config['states']
+        logger.info(f"Using saved states: {state_list}")
     else:
         # Default: only 50 states unless --include-territories
         if args.include_territories:
@@ -73,12 +100,11 @@ def cmd_download(args):
         if invalid:
             logger.error(f"Invalid layers: {invalid}")
             return 1
+    elif saved_config and 'dataset_types' in saved_config:
+        type_list = saved_config['dataset_types']
+        logger.info(f"Using saved dataset types: {type_list}")
     else:
         type_list = DEGAUSS_LAYERS
-
-    # State tracking backend
-    use_db = args.use_db  # True unless --no-use-db is passed
-    download_state = create_state_tracker(state_file_base, use_db=use_db)
 
     # Optionally sync state with file system before any other command
     if args.sync_state:
@@ -113,7 +139,9 @@ def cmd_download(args):
         return 0
 
     # Discover-only mode
-    if args.discover_only:
+    if args.discover_only:        # Save configuration for future runs
+        download_state.save_config(year, state_list, type_list)
+        logger.info(f"Saved configuration: year={year}, states={state_list}, types={type_list}")
         total_discovered = 0
         for state_fips in state_list:
             # If multiple states are provided, use the efficient multi-state function
@@ -132,11 +160,13 @@ def cmd_download(args):
             return 0
 
     # Download data for each state
-    async def run_all_downloads():
+    async def run_all_downloads():        # Save configuration for future runs
+        download_state.save_config(year, state_list, type_list)
+        logger.info(f"Saved configuration: year={year}, states={state_list}, types={type_list}")
         total_successful = 0
         total_failed = 0
         for state_fips in state_list:
-            results = await download_county_data(
+            results = await download_data_auto(
                 state_fips, args.year, output_dir, type_list, args.parallel, args.timeout, download_state
             )
             successful = sum(1 for r in results if r[0])

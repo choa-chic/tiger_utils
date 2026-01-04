@@ -113,7 +113,9 @@ async def download_data(state_fips: str, year: int, output_dir: Path,
     Returns:
         List of (success, url, message) tuples
     """
-    output_dir = output_dir / str(year) / state_fips
+    from .url_patterns import STATE_LEVEL_TYPES, NATIONAL_LEVEL_TYPES
+    
+    output_dir = output_dir / state_fips
     output_dir.mkdir(parents=True, exist_ok=True)
     urls = []
     if level == "county":
@@ -136,6 +138,57 @@ async def download_data(state_fips: str, year: int, output_dir: Path,
     else:
         raise ValueError(f"Invalid level: {level}. Must be 'county', 'state', or 'national'")
     return await download_urls(urls, output_dir, parallel, timeout, state, state_fips)
+
+async def download_data_auto(state_fips: str, year: int, output_dir: Path,
+                              dataset_types: List[str], parallel: int = 8,
+                              timeout: int = 60, state=None) -> List[tuple]:
+    """
+    Automatically download data by detecting the appropriate level for each dataset type.
+    Handles mixed county-level, state-level, and national-level types in one call.
+    
+    Args:
+        state_fips: State FIPS code
+        year: Year to download
+        output_dir: Output directory
+        dataset_types: List of dataset types (EDGES, ADDR, COUNTY, STATE, TRACT, etc.)
+        parallel: Number of parallel downloads
+        timeout: Request timeout in seconds
+        state: DownloadState or DownloadStateDB for tracking
+    
+    Returns:
+        List of (success, url, message) tuples
+    """
+    from .url_patterns import STATE_LEVEL_TYPES, NATIONAL_LEVEL_TYPES
+    
+    # Categorize dataset types by level
+    county_types = [dt for dt in dataset_types if dt not in STATE_LEVEL_TYPES and dt not in NATIONAL_LEVEL_TYPES]
+    state_types = [dt for dt in dataset_types if dt in STATE_LEVEL_TYPES]
+    national_types = [dt for dt in dataset_types if dt in NATIONAL_LEVEL_TYPES]
+    
+    all_results = []
+    
+    # Download county-level data
+    if county_types:
+        logger.info(f"Downloading county-level types for state {state_fips}: {county_types}")
+        results = await download_data(state_fips, year, output_dir, county_types,
+                                     level="county", parallel=parallel, timeout=timeout, state=state)
+        all_results.extend(results)
+    
+    # Download state-level data
+    if state_types:
+        logger.info(f"Downloading state-level types for state {state_fips}: {state_types}")
+        results = await download_data(state_fips, year, output_dir, state_types,
+                                     level="state", parallel=parallel, timeout=timeout, state=state)
+        all_results.extend(results)
+    
+    # Download national-level data (once per state request, but it's the same file)
+    if national_types:
+        logger.info(f"Downloading national-level types for state {state_fips}: {national_types}")
+        results = await download_data(state_fips, year, output_dir, national_types,
+                                     level="national", parallel=parallel, timeout=timeout, state=state)
+        all_results.extend(results)
+    
+    return all_results
 
 async def download_county_data(state_fips: str, year: int, output_dir: Path,
                                dataset_types: List[str], parallel: int = 8,

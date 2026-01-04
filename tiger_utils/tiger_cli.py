@@ -78,6 +78,7 @@ Examples:
     download_parser.add_argument('--year', type=int, default=2025, help='Year to download (default: 2025)')
     download_parser.add_argument('--output', type=str, default=None, help='Output directory (default: tiger_data/YYYY)')
     download_parser.add_argument('--states', type=str, help='Comma-separated state FIPS codes (e.g., "01,06,48")')
+    download_parser.add_argument('--all-states', action='store_true', help='Reset and use all 50 US states (overrides --states and saved config)')
     download_parser.add_argument('--types', type=str, help='Comma-separated layer types (e.g., "EDGES,ADDR")')
     download_parser.add_argument('--postgis-all', action='store_true', help='Include all PostGIS layers (TRACT, TABBLOCK20, COUNTY, STATE, PLACE, COUSUB, FACES, FEATNAMES, EDGES, ADDR)')
     download_parser.add_argument('--progress-file', type=str, default='.tiger_download_state', help='Path to progress file (default: .tiger_download_state, extension added automatically)')

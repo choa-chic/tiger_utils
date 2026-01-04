@@ -12,6 +12,7 @@ Show download status for all states/territories and exit (will likely be empty i
 Discover available files by scraping Census Bureau directories and populating the state database without downloading:
    
 `python -m tiger_utils download --discover-only`
+`python -m tiger_utils download --discover-only --year 2025 --postgis-all`
 
 ### Sync database state with files on disk
 Synchronize state database with files on disk (mark completed if file exists):
@@ -19,14 +20,22 @@ Synchronize state database with files on disk (mark completed if file exists):
 `python -m tiger_utils download --sync-state`
 
 ### Start downloading files
-Download all data for 2025 (default 50 states):
-
-`python -m tiger_utils download --year 2025`
-
 For more parallelization (if it gets too high, server will start rejecting requests)
 
 `python -m tiger_utils download --parallel 16`
-If `--year` was set in discovery above, you must also provide that here:
+If `--year` was set in discovery above, (this should be persisted in the config unless you change it).
+
+Configuration precedence (highest to lowest):
+1. Command-line arguments (highest priority)
+2. Saved configuration from state tracker
+3. Default values (lowest priority)
+
+Download all data for 2025 (default 50 states):
+
+(You could start with this command if you haven't discovered files yet, it will do that automatically)
+`python -m tiger_utils download --year 2025`
+
+
 
 `python -m tiger_utils download --year 2021`
 

@@ -30,7 +30,8 @@ class DownloadState:
             "completed": [],
             "failed": [],
             "states": {},
-            "discovered_urls": {}
+            "discovered_urls": {},
+            "config": {}
         }
     
     def save(self):
@@ -116,6 +117,20 @@ class DownloadState:
             "pending": len(pending),
             "pending_urls": pending[:10]
         }
+    
+    def save_config(self, year: int, states: List[str], dataset_types: List[str]):
+        """Save the download configuration for reuse."""
+        self.data["config"] = {
+            "year": year,
+            "states": states,
+            "dataset_types": dataset_types,
+            "timestamp": time.time()
+        }
+        self.save()
+    
+    def get_config(self) -> Optional[Dict]:
+        """Retrieve the last saved download configuration."""
+        return self.data.get("config")
 
 def sync_state_with_filesystem(output_dir: Path, download_state, state_list):
     """
@@ -268,6 +283,14 @@ if DUCKDB_AVAILABLE:
                     url VARCHAR PRIMARY KEY,
                     list_type VARCHAR NOT NULL,
                     added_at DOUBLE NOT NULL
+                )
+            """)
+            
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS config (
+                    key VARCHAR PRIMARY KEY,
+                    value VARCHAR NOT NULL,
+                    timestamp DOUBLE NOT NULL
                 )
             """)
         
@@ -465,6 +488,40 @@ if DUCKDB_AVAILABLE:
                 "pending": len(pending),
                 "pending_urls": pending[:10]
             }
+        
+        def save_config(self, year: int, states: List[str], dataset_types: List[str]):
+            """Save the download configuration for reuse."""
+            import json
+            timestamp = time.time()
+            self.conn.execute("""
+                INSERT INTO config (key, value, timestamp) VALUES ('year', ?, ?)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, timestamp = EXCLUDED.timestamp
+            """, [str(year), timestamp])
+            self.conn.execute("""
+                INSERT INTO config (key, value, timestamp) VALUES ('states', ?, ?)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, timestamp = EXCLUDED.timestamp
+            """, [json.dumps(states), timestamp])
+            self.conn.execute("""
+                INSERT INTO config (key, value, timestamp) VALUES ('dataset_types', ?, ?)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, timestamp = EXCLUDED.timestamp
+            """, [json.dumps(dataset_types), timestamp])
+        
+        def get_config(self) -> Optional[Dict]:
+            """Retrieve the last saved download configuration."""
+            import json
+            results = self.conn.execute("""
+                SELECT key, value, timestamp FROM config
+            """).fetchall()
+            if not results:
+                return None
+            config = {}
+            for key, value, timestamp in results:
+                if key == 'year':
+                    config['year'] = int(value)
+                elif key in ['states', 'dataset_types']:
+                    config[key] = json.loads(value)
+                config['timestamp'] = timestamp
+            return config if config else None
         
         def close(self):
             if hasattr(self, "conn") and self.conn:

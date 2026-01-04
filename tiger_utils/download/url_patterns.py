@@ -87,7 +87,7 @@ def construct_url(year: int, state_fips: str, county_fips: str, dataset_type: st
     elif dataset_type == 'TABBLOCK20':
         if dataset_type == 'TABBLOCK20' and year == 2025:
             logger.warning("TABBLOCK20 for 2025 is not available. Using 2024 for TABBLOCK20 only.")
-            url = f"{base_url}/{dir_part}/tl_2024_{state_fips}_{file_part}.zip"
+            url = f"https://www2.census.gov/geo/tiger/TIGER2024/{dir_part}/tl_2024_{state_fips}_{file_part}.zip"
         else:
             url = f"{base_url}/{dir_part}/tl_{year}_{state_fips}_{file_part}.zip"
     elif dataset_type in ['COUNTY','STATE','ZCTA520']:
