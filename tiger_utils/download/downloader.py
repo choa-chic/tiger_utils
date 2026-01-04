@@ -1,22 +1,20 @@
 """
-downloader.py - Download logic and parallelization for TIGER/Line downloads
+downloader.py - Unified download logic for TIGER/Line data (by level: county, state, national)
 """
 
 from pathlib import Path
-import os
-from typing import List, Iterable
-import time
-import httpx
+from typing import List, Iterable, Literal
 import asyncio
+import httpx
 from tiger_utils.utils.logger import get_logger, setup_logger
 from .progress_manager import DownloadState, DownloadStateDB
-from .url_patterns import construct_url, DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES
+from .url_patterns import construct_url, DATASET_TYPES, STATES
 from .discover import get_county_list
 
 setup_logger()
 logger = get_logger()
 
-async def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 60, 
+async def download_file(url: str, output_path: Path, retries: int = 8, timeout: int = 60,
                         state=None, state_fips: str = None) -> tuple:
     """
     Download a file with enhanced retry logic and partial download resume support.
@@ -38,7 +36,7 @@ async def download_file(url: str, output_path: Path, retries: int = 8, timeout: 
     logger.info(f"Preparing to download: {url} -> {output_path}")
     browser_headers = {
         "User-Agent": "TIGERDownloader/1.0 (Research/Educational Use)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/zip,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Connection": "keep-alive"
     }
@@ -48,133 +46,102 @@ async def download_file(url: str, output_path: Path, retries: int = 8, timeout: 
             headers = dict(browser_headers)
             if resume_pos > 0:
                 headers['Range'] = f'bytes={resume_pos}-'
-            logger.info(f"Using httpx (async) for: {url}")
             mode = 'ab' if resume_pos > 0 else 'wb'
             async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
                 async with client.stream("GET", url) as response:
                     response.raise_for_status()
-                    with open(temp_path, mode) as f:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with temp_path.open(mode) as f:
                         async for chunk in response.aiter_bytes(chunk_size=8192):
-                            if chunk:
-                                f.write(chunk)
+                            f.write(chunk)
             temp_path.rename(output_path)
-            logger.info(f"Downloaded: {output_path}")
+            file_size = output_path.stat().st_size
+            logger.info(f"Successfully downloaded: {output_path} ({file_size} bytes)")
             if state:
-                state.mark_completed(url, str(output_path), state_fips, output_path.stat().st_size)
-            return (True, url, "Downloaded")
+                state.mark_completed(url, str(output_path), state_fips, file_size)
+            return (True, url, f"Downloaded {file_size} bytes")
         except Exception as e:
             last_exception = e
-            logger.warning(f"Download failed (attempt {attempt+1}/{retries}) for {url}: {e}")
-            await asyncio.sleep(min(base_delay * (2 ** attempt), max_delay))
+            logger.warning(f"Attempt {attempt+1} failed: {e}")
+            if state and temp_path.exists():
+                state.mark_partial(url, str(temp_path), temp_path.stat().st_size, state_fips)
+            delay = min(base_delay * (2 ** attempt), max_delay)
+            if attempt < retries - 1:
+                logger.info(f"Retrying in {delay}s...")
+                await asyncio.sleep(delay)
     if state:
         state.mark_failed(url, str(output_path), str(last_exception), state_fips)
-    return (False, url, f"Failed after {retries} attempts")
+    return (False, url, f"Failed after {retries} attempts: {last_exception}")
 
-async def download_county_data(state_fips: str, year: int, output_dir: Path, 
-                               dataset_types: List[str], parallel: int = 8, 
-                               timeout: int = 60, state=None, 
-                               discover_files: bool = False):
+async def download_urls(urls: Iterable[str], output_dir: Path, parallel: int = 8,
+                        timeout: int = 60, state=None, state_fips: str = None) -> List[tuple]:
     """
-    Download county-level data for a state.
+    Download a list of URLs in parallel.
+    Returns list of (success, url, message) tuples.
     """
-    logger.info(f"Starting county data download for state {state_fips}, year {year}, datasets: {dataset_types}")
-    # Use 'EDGES' as the default dataset_type for county list scraping
-    counties = get_county_list(state_fips, year, dataset_types[0] if dataset_types else 'EDGES')
-    logger.info(f"Found {len(counties)} counties for state {state_fips}")
-    download_tasks = []
-    # Only honor discovered URLs when explicitly requested; otherwise download everything
-    discovered_urls = None
-    if discover_files and state is not None:
-        if hasattr(state, 'data'):
-            discovered_urls = set(state.data.get('discovered_urls', {}).get(state_fips, []))
-        elif hasattr(state, 'get_pending_urls'):
-            try:
-                discovered_urls = set(state.get_pending_urls(state_fips))
-            except Exception:
-                discovered_urls = None
-    for dataset_type in dataset_types:
-        logger.info(f"Preparing download tasks for dataset type: {dataset_type}")
-        for county_fips in counties:
-            url = construct_url(year, state_fips, county_fips, dataset_type)
-            if discover_files and discovered_urls is not None and url not in discovered_urls:
-                logger.debug(f"Skipping non-discovered URL: {url}")
-                continue
-            filename = os.path.basename(url)
-            output_path = output_dir / state_fips / filename
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Task: {url} -> {output_path}")
-            download_tasks.append((url, output_path, dataset_type, county_fips))
-    successful = 0
-    failed = 0
-    not_found = 0
-    logger.info(f"Starting parallel downloads with {parallel} workers (asyncio)")
-    sem = asyncio.Semaphore(parallel)
-
-    async def sem_download_file(*args, **kwargs):
-        async with sem:
-            return await download_file(*args, **kwargs)
-
-    tasks = [sem_download_file(url, output_path, 8, timeout, state, state_fips) for url, output_path, _, _ in download_tasks]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for i, result in enumerate(results):
-        url, output_path, _, _ = download_tasks[i]
-        if isinstance(result, Exception):
-            logger.error(f"Error downloading {url}: {result}")
-            failed += 1
-        else:
-            success, _, msg = result
-            if success:
-                logger.info(f"Download succeeded: {url}")
-                successful += 1
-            else:
-                logger.info(f"Download failed: {url} ({msg})")
-                if 'not found' in msg.lower() or '404' in msg:
-                    not_found += 1
-                else:
-                    failed += 1
-    logger.info(f"Download summary for {state_fips}: Successful: {successful}, Failed: {failed}, Not found: {not_found}")
-    return successful, failed, not_found
-
-
-async def download_discovered_urls(state_fips: str, urls: Iterable[str], output_dir: Path,
-                                   parallel: int = 8, timeout: int = 60, state=None):
-    """
-    Download the provided URLs for a state; intended for previously discovered-but-missing files.
-    """
-    urls = list(dict.fromkeys(urls))  # de-duplicate while preserving order
-    logger.info(f"Starting discovered downloads for state {state_fips}; {len(urls)} pending")
-    download_tasks = []
+    output_dir.mkdir(parents=True, exist_ok=True)
+    tasks = []
     for url in urls:
-        filename = os.path.basename(url)
-        output_path = output_dir / state_fips / filename
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        download_tasks.append((url, output_path))
-    sem = asyncio.Semaphore(parallel)
+        filename = url.split('/')[-1]
+        output_path = output_dir / filename
+        tasks.append(download_file(url, output_path, timeout=timeout, state=state, state_fips=state_fips))
+    results = []
+    for coro in asyncio.as_completed(tasks, timeout=None):
+        result = await coro
+        results.append(result)
+        completed = sum(1 for r in results if r[0])
+        logger.info(f"Progress: {completed}/{len(tasks)} completed")
+    return results
 
-    async def sem_download_file(*args, **kwargs):
-        async with sem:
-            return await download_file(*args, **kwargs)
+async def download_data(state_fips: str, year: int, output_dir: Path,
+                        dataset_types: List[str], level: Literal["county", "state", "national"] = "county",
+                        parallel: int = 8, timeout: int = 60, state=None) -> List[tuple]:
+    """
+    Unified downloader that handles county, state, and national level downloads.
+    Uses construct_url() to generate proper URLs for each level.
+    
+    Args:
+        state_fips: State FIPS code (ignored for national level)
+        year: Year to download
+        output_dir: Output directory
+        dataset_types: List of dataset types (EDGES, ADDR, COUNTY, STATE, etc.)
+        level: Download level - "county", "state", or "national"
+        parallel: Number of parallel downloads
+        timeout: Request timeout in seconds
+        state: DownloadState or DownloadStateDB for tracking
+    
+    Returns:
+        List of (success, url, message) tuples
+    """
+    output_dir = output_dir / str(year) / state_fips
+    output_dir.mkdir(parents=True, exist_ok=True)
+    urls = []
+    if level == "county":
+        counties = get_county_list(state_fips, year, dataset_types[0], timeout)
+        for county_fips in counties:
+            for dataset_type in dataset_types:
+                url = construct_url(year, state_fips, county_fips, dataset_type)
+                urls.append(url)
+        logger.info(f"Discovered {len(urls)} files for {len(counties)} counties in state {state_fips}")
+    elif level == "state":
+        for dataset_type in dataset_types:
+            url = construct_url(year, state_fips, "", dataset_type)
+            urls.append(url)
+        logger.info(f"Generated {len(urls)} state-level URLs for state {state_fips}")
+    elif level == "national":
+        for dataset_type in dataset_types:
+            url = construct_url(year, "", "", dataset_type)
+            urls.append(url)
+        logger.info(f"Generated {len(urls)} national-level URLs")
+    else:
+        raise ValueError(f"Invalid level: {level}. Must be 'county', 'state', or 'national'")
+    return await download_urls(urls, output_dir, parallel, timeout, state, state_fips)
 
-    tasks = [sem_download_file(url, output_path, 8, timeout, state, state_fips) for url, output_path in download_tasks]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    successful = 0
-    failed = 0
-    not_found = 0
-    for i, result in enumerate(results):
-        url, output_path = download_tasks[i]
-        if isinstance(result, Exception):
-            logger.error(f"Error downloading {url}: {result}")
-            failed += 1
-        else:
-            success, _, msg = result
-            if success:
-                logger.info(f"Download succeeded: {url}")
-                successful += 1
-            else:
-                logger.info(f"Download failed: {url} ({msg})")
-                if 'not found' in msg.lower() or '404' in msg:
-                    not_found += 1
-                else:
-                    failed += 1
-    logger.info(f"Discovered download summary for {state_fips}: Successful: {successful}, Failed: {failed}, Not found: {not_found}")
-    return successful, failed, not_found
+async def download_county_data(state_fips: str, year: int, output_dir: Path,
+                               dataset_types: List[str], parallel: int = 8,
+                               timeout: int = 60, state=None) -> List[tuple]:
+    """
+    Convenience wrapper for county-level downloads.
+    """
+    return await download_data(state_fips, year, output_dir, dataset_types,
+                               level="county", parallel=parallel, timeout=timeout, state=state)

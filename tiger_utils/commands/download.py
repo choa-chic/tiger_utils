@@ -5,7 +5,7 @@ Download command - Download TIGER/Line shapefiles from US Census Bureau
 import asyncio
 from pathlib import Path
 
-from tiger_utils.download.downloader import download_county_data, download_discovered_urls
+from tiger_utils.download.downloader import download_county_data, download_urls
 from tiger_utils.download.progress_manager import DownloadState, DownloadStateDB
 from tiger_utils.download.discover import discover_state_files, discover_state_files_multi
 from tiger_utils.download.url_patterns import (
@@ -135,23 +135,21 @@ def cmd_download(args):
     async def run_all_downloads():
         total_successful = 0
         total_failed = 0
-        total_not_found = 0
         for state_fips in state_list:
-            successful, failed, not_found = await download_county_data(
-                state_fips, args.year, output_dir, type_list, args.parallel, args.timeout, download_state, discover_files=False
+            results = await download_county_data(
+                state_fips, args.year, output_dir, type_list, args.parallel, args.timeout, download_state
             )
+            successful = sum(1 for r in results if r[0])
+            failed = len(results) - successful
             total_successful += successful
             total_failed += failed
-            total_not_found += not_found
         logger.info(f"Total Successful: {total_successful}")
-        logger.info(f"Total Not Found:  {total_not_found}")
         logger.info(f"Total Failed:     {total_failed}")
         return 0 if total_failed == 0 else 1
 
     async def run_discovered_downloads():
         total_successful = 0
         total_failed = 0
-        total_not_found = 0
         for state_fips in state_list:
             try:
                 pending_urls = download_state.get_pending_urls(state_fips)
@@ -161,14 +159,16 @@ def cmd_download(args):
             if not pending_urls:
                 logger.info(f"No pending discovered files for {state_fips}")
                 continue
-            successful, failed, not_found = await download_discovered_urls(
-                state_fips, pending_urls, output_dir, args.parallel, args.timeout, download_state
+            
+            state_output_dir = output_dir / str(args.year) / state_fips
+            results = await download_urls(
+                pending_urls, state_output_dir, args.parallel, args.timeout, download_state, state_fips
             )
+            successful = sum(1 for r in results if r[0])
+            failed = len(results) - successful
             total_successful += successful
             total_failed += failed
-            total_not_found += not_found
         logger.info(f"Total Successful: {total_successful}")
-        logger.info(f"Total Not Found:  {total_not_found}")
         logger.info(f"Total Failed:     {total_failed}")
         return 0 if total_failed == 0 else 1
 

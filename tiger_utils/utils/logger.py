@@ -49,14 +49,14 @@ def setup_logger():
 		# Console handler
 		ch = logging.StreamHandler(sys.stdout)
 		ch.setLevel(logging.INFO)
-		ch_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+		ch_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s:%(funcName)s:%(lineno)d - %(message)s")
 		ch.setFormatter(ch_formatter)
 		logger.addHandler(ch)
 
 		# Rotating file handler (by line count)
 		fh = LineRotatingFileHandler(_LOG_FILE, maxLines=_MAX_LINES, backupCount=_BACKUP_COUNT, encoding="utf-8")
 		fh.setLevel(logging.INFO)
-		fh_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+		fh_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s:%(funcName)s:%(lineno)d - %(message)s")
 		fh.setFormatter(fh_formatter)
 		logger.addHandler(fh)
 	return logger

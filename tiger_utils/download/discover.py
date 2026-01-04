@@ -74,6 +74,8 @@ def discover_state_files_multi(states_fips: List[str], year: int, dataset_types:
     Returns:
         Dictionary mapping dataset type to {state_fips: set of discovered URLs}
     """
+    from tiger_utils.download.url_patterns import NATIONAL_LEVEL_TYPES
+    
     discovered = {dataset_type: {} for dataset_type in dataset_types}
     base_url = f"https://www2.census.gov/geo/tiger/TIGER{year}"
     logger.info(f"Starting multi-state discovery for states {states_fips}, year {year}, datasets: {dataset_types}")
@@ -81,19 +83,37 @@ def discover_state_files_multi(states_fips: List[str], year: int, dataset_types:
         dir_url = f"{base_url}/{dataset_type}/"
         logger.info(f"Scraping directory for dataset type: {dataset_type} at {dir_url}")
         links = scrape_directory(dir_url, timeout=timeout)
-        # Group links by state FIPS
-        state_map = {state: set() for state in states_fips}
-        for l in links:
-            # Example: tl_2025_06001_edges.zip or tl_2025_06001_addr.zip
-            parts = l.split('_')
-            if len(parts) >= 3 and parts[0] == f"tl" and parts[1] == str(year):
-                state_county = parts[2]
+        
+        # Handle national-level files (COUNTY, STATE, ZCTA520)
+        if dataset_type in NATIONAL_LEVEL_TYPES:
+            # Look for _us_ pattern and include for all requested states
+            national_files = set()
+            for l in links:
+                if f"_us_{dataset_type.lower()}" in l.lower() and l.endswith('.zip'):
+                    national_files.add(f"{dir_url}{l}")
+            if national_files:
+                logger.info(f"Found {len(national_files)} national-level file(s) for {dataset_type}")
+                # Include the national file for each requested state
                 for state in states_fips:
-                    if state_county.startswith(state):
-                        state_map[state].add(f"{dir_url}{l}")
-        for state, files in state_map.items():
-            logger.info(f"Found {len(files)} candidate files for state {state} in {dataset_type}")
-            discovered[dataset_type][state] = files
+                    discovered[dataset_type][state] = national_files
+            else:
+                logger.info(f"No national-level files found for {dataset_type}")
+                for state in states_fips:
+                    discovered[dataset_type][state] = set()
+        else:
+            # Group state/county-level links by state FIPS
+            state_map = {state: set() for state in states_fips}
+            for l in links:
+                # Example: tl_2025_06001_edges.zip or tl_2025_06_tract.zip
+                parts = l.split('_')
+                if len(parts) >= 3 and parts[0] == f"tl" and parts[1] == str(year):
+                    state_county = parts[2]
+                    for state in states_fips:
+                        if state_county.startswith(state):
+                            state_map[state].add(f"{dir_url}{l}")
+            for state, files in state_map.items():
+                logger.info(f"Found {len(files)} candidate files for state {state} in {dataset_type}")
+                discovered[dataset_type][state] = files
     logger.info(f"Multi-state discovery complete for year {year}")
     return discovered
 

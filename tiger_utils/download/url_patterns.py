@@ -2,6 +2,11 @@
 url_patterns.py - URL construction and dataset/type constants for TIGER/Line downloads
 """
 
+from tiger_utils.utils.logger import get_logger
+from .discover import get_county_list
+
+logger = get_logger()
+
 # State FIPS codes
 STATES = {
     '01': 'Alabama', '02': 'Alaska', '04': 'Arizona', '05': 'Arkansas',
@@ -60,7 +65,11 @@ POSTGIS_LAYERS = ['TRACT', 'TABBLOCK20', 'COUNTY', 'STATE', 'PLACE', 'COUSUB', '
 # County-level types (default for county downloads)
 COUNTY_LEVEL_TYPES = DEGAUSS_LAYERS
 
-from .discover import get_county_list
+# National-level types (single file for entire country)
+NATIONAL_LEVEL_TYPES = ['COUNTY', 'STATE', 'ZCTA520']
+
+# State-level types (one file per state)
+STATE_LEVEL_TYPES = ['PLACE', 'COUSUB', 'TRACT', 'BG', 'TABBLOCK20', 'CD118', 'SLDL', 'SLDU', 'UNSD', 'ELSD', 'SCSD']
 
 def construct_url(year: int, state_fips: str, county_fips: str, dataset_type: str) -> str:
     """
@@ -75,10 +84,15 @@ def construct_url(year: int, state_fips: str, county_fips: str, dataset_type: st
         url = f"{base_url}/{dir_part}/tl_{year}_{state_fips}{county_fips}_{file_part}.zip"
     elif dataset_type in ['PLACE', 'COUSUB', 'TRACT', 'BG']:
         url = f"{base_url}/{dir_part}/tl_{year}_{state_fips}_{file_part}.zip"
-    elif dataset_type == 'COUNTY':
-        url = f"{base_url}/COUNTY/tl_{year}_{state_fips}_county.zip"
-    elif dataset_type == 'STATE':
-        url = f"{base_url}/STATE/tl_{year}_us_state.zip"
+    elif dataset_type == 'TABBLOCK20':
+        if dataset_type == 'TABBLOCK20' and year == 2025:
+            logger.warning("TABBLOCK20 for 2025 is not available. Using 2024 for TABBLOCK20 only.")
+            url = f"{base_url}/{dir_part}/tl_2024_{state_fips}_{file_part}.zip"
+        else:
+            url = f"{base_url}/{dir_part}/tl_{year}_{state_fips}_{file_part}.zip"
+    elif dataset_type in ['COUNTY','STATE','ZCTA520']:
+        url = f"{base_url}/{dir_part}/tl_{year}_us_{file_part}.zip"
     else:
         url = f"{base_url}/{dir_part}/tl_{year}_{state_fips}_{file_part}.zip"
+        # this has not been tested for all types
     return url

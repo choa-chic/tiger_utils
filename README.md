@@ -6,7 +6,7 @@ By default, only the layers needed for DeGAUSS geocoding are downloaded (EDGES, 
  
 Show download status for all states/territories and exit (will likely be empty if nothing else has been initiated):
 
-`  python -m tiger_utils download --show-status`
+`python -m tiger_utils download --show-status`
 
 ### Discover available files
 Discover available files by scraping Census Bureau directories and populating the state database without downloading:
