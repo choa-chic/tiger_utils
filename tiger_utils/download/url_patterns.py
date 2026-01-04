@@ -51,7 +51,14 @@ DATASET_TYPES = {
     'SCSD': 'Secondary School Districts',
 }
 
-COUNTY_LEVEL_TYPES = ['EDGES', 'ADDR', 'FEATNAMES']
+# Default layers for DEGAUSS processing
+DEGAUSS_LAYERS = ['EDGES', 'ADDR', 'FEATNAMES']
+
+# All layers available in PostGIS
+POSTGIS_LAYERS = ['TRACT', 'TABBLOCK20', 'COUNTY', 'STATE', 'PLACE', 'COUSUB', 'FACES', 'FEATNAMES', 'EDGES', 'ADDR']
+
+# County-level types (default for county downloads)
+COUNTY_LEVEL_TYPES = DEGAUSS_LAYERS
 
 from .discover import get_county_list
 

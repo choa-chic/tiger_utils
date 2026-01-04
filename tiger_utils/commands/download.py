@@ -9,7 +9,7 @@ from tiger_utils.download.downloader import download_county_data, download_disco
 from tiger_utils.download.progress_manager import DownloadState, DownloadStateDB
 from tiger_utils.download.discover import discover_state_files, discover_state_files_multi
 from tiger_utils.download.url_patterns import (
-    DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES, FIFTY_STATE_FIPS, TERRITORY_FIPS
+    DATASET_TYPES, STATES, COUNTY_LEVEL_TYPES, FIFTY_STATE_FIPS, TERRITORY_FIPS, DEGAUSS_LAYERS, POSTGIS_LAYERS
 )
 from tiger_utils.utils.logger import get_logger
 
@@ -65,14 +65,16 @@ def cmd_download(args):
             state_list = sorted(FIFTY_STATE_FIPS)
 
     # Determine which layers to download
-    if args.types:
+    if args.postgis_all:
+        type_list = POSTGIS_LAYERS
+    elif args.types:
         type_list = [t.strip().upper() for t in args.types.split(',')]
         invalid = [t for t in type_list if t not in DATASET_TYPES]
         if invalid:
             logger.error(f"Invalid layers: {invalid}")
             return 1
     else:
-        type_list = ['EDGES', 'ADDR', 'FEATNAMES'] if args.discover_only else COUNTY_LEVEL_TYPES
+        type_list = DEGAUSS_LAYERS
 
     # State tracking backend
     use_db = args.use_db  # True unless --no-use-db is passed
