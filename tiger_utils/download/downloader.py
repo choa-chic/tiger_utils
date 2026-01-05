@@ -23,7 +23,7 @@ async def download_file(url: str, output_path: Path, retries: int = 8, timeout: 
     base_delay = 2
     max_delay = 60
     if output_path.exists():
-        logger.info(f"File already exists: {output_path}")
+        logger.debug(f"File already exists: {output_path}")
         if state:
             state.mark_completed(url, str(output_path), state_fips, output_path.stat().st_size)
         return (True, url, "Already exists")
@@ -77,20 +77,37 @@ async def download_urls(urls: Iterable[str], output_dir: Path, parallel: int = 8
                         timeout: int = 60, state=None, state_fips: str = None) -> List[tuple]:
     """
     Download a list of URLs in parallel.
+    Skips URLs that are already marked as completed in the progress database.
     Returns list of (success, url, message) tuples.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     tasks = []
+    results = []
+    
     for url in urls:
         filename = url.split('/')[-1]
         output_path = output_dir / filename
+        
+        # Check if already completed in progress database
+        if state and state.is_completed(str(output_path)):
+            logger.debug(f"Skipping already completed: {url}")
+            results.append((True, url, "Already marked as completed"))
+            continue
+        
         tasks.append(download_file(url, output_path, timeout=timeout, state=state, state_fips=state_fips))
-    results = []
+    
+    # Log how many were skipped
+    skipped_count = len(results)
+    if skipped_count > 0:
+        logger.info(f"Skipped {skipped_count} already-completed files")
+    
+    # Download remaining files
     for coro in asyncio.as_completed(tasks, timeout=None):
         result = await coro
         results.append(result)
         completed = sum(1 for r in results if r[0])
-        logger.info(f"Progress: {completed}/{len(tasks)} completed")
+        total = len(tasks) + skipped_count
+        logger.info(f"Progress: {completed}/{total} completed")
     return results
 
 async def download_data(state_fips: str, year: int, output_dir: Path,
